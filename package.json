@@ -1,0 +1,33 @@
+{
+  "name": "puppeter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "API que simula acessos a plataforma AVEC via Puppeteer com IP dedicado por sessao",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "dotenv": "^18.0.10",
+    "express": "^5.3.0",
+    "ioredis": "^6.0.0",
+    "mysql2": "^3.24.6",
+    "pino": "^10.4.0",
+    "puppeteer": "^25.18.1",
+    "swagger-ui-express": "^5.0.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.6",
+    "@types/swagger-ui-express": "^4.1.8",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
