@@ -1,0 +1,22 @@
+[Unit]
+Description=conecta-pup (API Puppeteer / AVEC)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pup
+Group=pup
+WorkingDirectory=/var/www/conecta-pup
+Environment=NODE_ENV=production
+Environment=PUPPETEER_CACHE_DIR=/var/www/conecta-pup/.cache/puppeteer
+ExecStart=/usr/bin/node dist/server.js
+Restart=always
+RestartSec=5
+# Mata o Chromium junto com a API (todos os filhos ficam no cgroup)
+KillMode=control-group
+TimeoutStopSec=30
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

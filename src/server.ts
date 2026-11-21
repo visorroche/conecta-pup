@@ -46,8 +46,8 @@ app.use((err: Error & { type?: string }, _req: Request, res: Response, _next: Ne
 
 await ensureSchema();
 
-const server = app.listen(config.PORT, () => {
-  logger.info({ port: config.PORT, docs: `http://localhost:${config.PORT}/docs` }, "listening");
+const server = app.listen(config.PORT, config.HOST, () => {
+  logger.info({ host: config.HOST, port: config.PORT, docs: `http://localhost:${config.PORT}/docs` }, "listening");
 });
 
 let closing = false;

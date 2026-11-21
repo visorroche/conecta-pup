@@ -7,6 +7,8 @@ const bool = z
 
 const schema = z.object({
   PORT: z.coerce.number().int().positive().default(3100),
+  // Interface de escuta. Em producao fica em 127.0.0.1 (quem expoe e o nginx)
+  HOST: z.string().default("127.0.0.1"),
   // Banco onde fica a tabela customers_bridget (uma "ponte" Bright Data por cliente)
   DB_HOST: z.string().min(1),
   DB_PORT: z.coerce.number().int().positive().default(3306),
