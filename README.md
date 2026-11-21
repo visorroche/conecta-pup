@@ -272,6 +272,15 @@ SELECT route, error_code, http_status, COUNT(*) n FROM api_call_log WHERE http_s
 
 As gravacoes sao assincronas e nao interrompem a chamada se o banco falhar. Respostas que chegam depois do fim da rota herdam IP/zone/`call_id` da ultima chamada do slug.
 
+## Deploy (producao)
+
+- **Onde:** VPS `187.45.255.52` (o mesmo do conectabi), servico systemd `conecta-pup`, app em `/var/www/conecta-pup`, API em `127.0.0.1:3100` atras do nginx (`pup.pontedosdados.com.br`).
+- **CI/CD:** push em `main` roda `.github/workflows/deploy.yml`: SSH no servidor, `git reset --hard origin/main`, grava o `.env` a partir do secret `ENV` e executa `scripts/deploy.sh` (apt de libs do Chromium, `npm ci` + build, systemd, nginx, certbot, healthcheck).
+- **Secrets do repositorio:** `SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY` (chave dedicada ao CI) e `ENV` (conteudo do `.env` de producao, sem `TEST_AVEC_*`).
+- **HTTPS:** o certbot so roda quando o DNS de `pup.pontedosdados.com.br` ja aponta para o servidor; senao o proximo deploy tenta de novo.
+- **Operacao:** `systemctl status conecta-pup`, `journalctl -u conecta-pup -f`.
+- Cada deploy reinicia a API e fecha os Chromium abertos; os clientes precisam fazer login de novo.
+
 ## Variaveis de ambiente
 
 Veja `.env.example`. As principais: `PORT`, `DB_*`, `PROXY_ENABLED`, `BRD_API_KEY`, `BRD_HOST`, `BRD_PORT`, `BRD_ZONE_IPS`, `BRD_MAX_BRIDGES`, `PUPPETEER_HEADLESS`, `SESSION_TTL_SECONDS`.

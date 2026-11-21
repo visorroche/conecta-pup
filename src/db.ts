@@ -1,6 +1,11 @@
+import net from "node:net";
 import mysql from "mysql2/promise";
 import { config } from "./config.js";
 import { logger } from "./logger.js";
+
+// Node 20+ espera so 250ms por tentativa (IPv4/IPv6). Com banco remoto isso estoura e
+// derruba a conexao com ETIMEDOUT; damos mais folga.
+net.setDefaultAutoSelectFamilyAttemptTimeout(3000);
 
 export const pool = mysql.createPool({
   host: config.DB_HOST,

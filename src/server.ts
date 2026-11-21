@@ -44,7 +44,17 @@ app.use((err: Error & { type?: string }, _req: Request, res: Response, _next: Ne
   res.status(500).json({ error: "internal_error", message: "Erro interno" });
 });
 
-await ensureSchema();
+// Banco remoto pode demorar a responder na partida: tenta algumas vezes antes de desistir.
+for (let attempt = 1; ; attempt++) {
+  try {
+    await ensureSchema();
+    break;
+  } catch (err) {
+    if (attempt >= 5) throw err;
+    logger.warn({ attempt, err: (err as Error).message }, "db_schema_retry");
+    await new Promise((r) => setTimeout(r, 2000 * attempt));
+  }
+}
 
 const server = app.listen(config.PORT, config.HOST, () => {
   logger.info({ host: config.HOST, port: config.PORT, docs: `http://localhost:${config.PORT}/docs` }, "listening");
