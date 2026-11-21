@@ -4,7 +4,8 @@ import path from "node:path";
 import puppeteer, { type Browser, type Page } from "puppeteer";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
-import { redis } from "../redis.js";
+import type { RowDataPacket } from "mysql2";
+import { pool } from "../db.js";
 import { type Bridge, getBridgeCached } from "./bridge.js";
 import { attachAvecLogger, bindCall, noteCall, releaseCall } from "./call-log.js";
 import { BRD_COUNTRY, buildProxySettings, fetchExitIp, newProxySessionId } from "./proxy.js";
@@ -14,7 +15,7 @@ async function bridgeNote(slug: string): Promise<{ zone: string | null; salaoId:
   return { zone: bridge?.brdZone ?? null, salaoId: bridge?.salaoId ?? null };
 }
 
-/** Dados persistidos no Redis por slug. Nunca guardar senha aqui. */
+/** Dados persistidos por slug em customers_bridget.session_data (JSON). Nunca guardar senha aqui. */
 export interface StoredSession {
   slug: string;
   sessionId: string;
@@ -45,34 +46,81 @@ export class SessionBusyError extends Error {
 const SESSIONS_DIR = path.resolve(process.cwd(), ".sessions");
 const LOCK_TTL_MS = 120_000;
 
-const sessionKey = (slug: string) => `avec:session:${slug}`;
-const lockKey = (slug: string) => `avec:lock:${slug}`;
-
 /** Browsers abertos por este processo (evita reconectar via websocket). */
 const liveBrowsers = new Map<string, Browser>();
 
-async function readStored(slug: string): Promise<StoredSession | null> {
-  const raw = await redis.get(sessionKey(slug));
-  if (!raw) return null;
+/**
+ * Lock por slug em memoria (uma instancia da API). slug -> { token, expiresAt }.
+ * Se um dia houver mais de uma instancia, trocar por lock no banco (GET_LOCK).
+ */
+const locks = new Map<string, { token: string; expiresAt: number }>();
+
+function acquireLock(slug: string): string | null {
+  const current = locks.get(slug);
+  if (current && current.expiresAt > Date.now()) return null;
+  const token = randomUUID();
+  locks.set(slug, { token, expiresAt: Date.now() + LOCK_TTL_MS });
+  return token;
+}
+
+function releaseLock(slug: string, token: string): void {
+  if (locks.get(slug)?.token === token) locks.delete(slug);
+}
+
+/**
+ * Cache em memoria da sessao. E a fonte primaria quando nao ha linha em
+ * customers_bridget (PROXY_ENABLED=false); com linha, o banco e a fonte de verdade.
+ */
+const memSessions = new Map<string, StoredSession>();
+
+function isExpired(stored: StoredSession): boolean {
+  const last = Date.parse(stored.lastUsedAt);
+  return Number.isFinite(last) && Date.now() - last > config.SESSION_TTL_SECONDS * 1000;
+}
+
+/** Le a sessao crua (sem checar validade): coluna session_data, ou memoria. */
+async function readStoredRaw(slug: string): Promise<StoredSession | null> {
   try {
-    return JSON.parse(raw) as StoredSession;
-  } catch {
+    const [rows] = await pool.query<RowDataPacket[]>(
+      "SELECT session_data FROM customers_bridget WHERE slug = ? LIMIT 1",
+      [slug],
+    );
+    const raw = rows[0]?.session_data as string | null | undefined;
+    if (raw) return JSON.parse(raw) as StoredSession;
+    if (rows.length > 0) return null;
+  } catch (err) {
+    logger.error({ slug, err: (err as Error).message }, "session_read_failed");
+  }
+  return memSessions.get(slug) ?? null;
+}
+
+/** Le a sessao; se passou do TTL de inatividade, fecha o Chromium e descarta. */
+async function readStored(slug: string): Promise<StoredSession | null> {
+  const stored = await readStoredRaw(slug);
+  if (!stored) return null;
+  if (isExpired(stored)) {
+    await destroySession(slug);
     return null;
   }
+  return stored;
 }
 
 export async function saveStored(stored: StoredSession): Promise<void> {
-  await redis.set(
-    sessionKey(stored.slug),
+  memSessions.set(stored.slug, stored);
+  await pool.query("UPDATE customers_bridget SET session_data = ? WHERE slug = ?", [
     JSON.stringify(stored),
-    "EX",
-    config.SESSION_TTL_SECONDS,
-  );
+    stored.slug,
+  ]);
 }
 
-/** Renova o TTL de inatividade e atualiza lastUsedAt. */
+async function clearStored(slug: string): Promise<void> {
+  memSessions.delete(slug);
+  await pool.query("UPDATE customers_bridget SET session_data = NULL WHERE slug = ?", [slug]);
+}
+
+/** Atualiza lastUsedAt (renova o TTL de inatividade). */
 export async function touchSession(slug: string): Promise<void> {
-  const stored = await readStored(slug);
+  const stored = await readStoredRaw(slug);
   if (!stored) return;
   stored.lastUsedAt = new Date().toISOString();
   await saveStored(stored);
@@ -214,14 +262,14 @@ export class ProxyUnavailableError extends Error {
   }
 }
 
-/** Fecha o Chromium e apaga a sessao do Redis. */
+/** Fecha o Chromium e apaga a sessao (coluna session_data). */
 export async function destroySession(slug: string): Promise<void> {
   const browser = liveBrowsers.get(slug);
   liveBrowsers.delete(slug);
   if (browser) {
     await browser.close().catch(() => undefined);
   } else {
-    const stored = await readStored(slug);
+    const stored = await readStoredRaw(slug);
     if (stored) {
       try {
         const b = await puppeteer.connect({ browserWSEndpoint: stored.wsEndpoint });
@@ -231,11 +279,13 @@ export async function destroySession(slug: string): Promise<void> {
       }
     }
   }
-  await redis.del(sessionKey(slug));
+  await clearStored(slug).catch((err) =>
+    logger.error({ slug, err: (err as Error).message }, "session_clear_failed"),
+  );
 }
 
 /**
- * Executa `fn` com exclusividade por slug. Se a sessao existir no Redis e o
+ * Executa `fn` com exclusividade por slug. Se a sessao existir no banco e o
  * Chromium estiver vivo, reaproveita; caso contrario cria uma nova (novo IP).
  */
 export async function withSession<T>(
@@ -249,9 +299,8 @@ export async function withSession<T>(
   },
 ): Promise<T> {
   const { shouldReset, resolveBridge } = opts;
-  const token = randomUUID();
-  const locked = await redis.set(lockKey(slug), token, "PX", LOCK_TTL_MS, "NX");
-  if (locked !== "OK") throw new SessionBusyError(slug);
+  const token = acquireLock(slug);
+  if (!token) throw new SessionBusyError(slug);
   bindCall(slug);
 
   try {
@@ -273,7 +322,7 @@ export async function withSession<T>(
           ...(await bridgeNote(slug)),
         });
       } else {
-        await redis.del(sessionKey(slug));
+        await clearStored(slug);
       }
     }
     if (!handle) {
@@ -283,9 +332,7 @@ export async function withSession<T>(
     return await fn(handle);
   } finally {
     releaseCall(slug);
-    // libera o lock somente se ainda for nosso
-    const current = await redis.get(lockKey(slug));
-    if (current === token) await redis.del(lockKey(slug));
+    releaseLock(slug, token);
   }
 }
 
@@ -304,9 +351,8 @@ export async function withExistingSession<T>(
   slug: string,
   fn: (handle: SessionHandle) => Promise<T>,
 ): Promise<T> {
-  const token = randomUUID();
-  const locked = await redis.set(lockKey(slug), token, "PX", LOCK_TTL_MS, "NX");
-  if (locked !== "OK") throw new SessionBusyError(slug);
+  const token = acquireLock(slug);
+  if (!token) throw new SessionBusyError(slug);
   bindCall(slug);
 
   try {
@@ -321,14 +367,13 @@ export async function withExistingSession<T>(
     });
     const browser = await resolveLiveBrowser(stored);
     if (!browser) {
-      await redis.del(sessionKey(slug));
+      await clearStored(slug);
       throw new NoSessionError(slug);
     }
     return await fn({ browser, stored, reused: true });
   } finally {
     releaseCall(slug);
-    const current = await redis.get(lockKey(slug));
-    if (current === token) await redis.del(lockKey(slug));
+    releaseLock(slug, token);
   }
 }
 

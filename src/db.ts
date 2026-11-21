@@ -51,6 +51,10 @@ export async function ensureSchema(): Promise<void> {
   await pool.query(
     "CREATE INDEX IF NOT EXISTS idx_customers_bridget_salao_id ON customers_bridget (salao_id)",
   );
+  // Sessao do Chromium (wsEndpoint = "token" de reconexao, IP, login...) em JSON
+  await pool.query(
+    "ALTER TABLE customers_bridget ADD COLUMN IF NOT EXISTS session_data TEXT NULL AFTER brd_password",
+  );
 
   // Uma linha por chamada a esta API (rota, quando, resultado, IP/zona usados)
   await pool.query(`

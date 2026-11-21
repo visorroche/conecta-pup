@@ -17,7 +17,7 @@ export const openApiDocument = {
     description:
       "API que simula acessos a plataforma AVEC (SaaS B2B) usando Chromium via Puppeteer. " +
       "Cada slug mantem uma sessao de navegador com um IP proprio (Bright Data `-session-<id>`), " +
-      "guardada no Redis e reaproveitada nas chamadas seguintes.",
+      "guardada no banco (`customers_bridget.session_data`) e reaproveitada nas chamadas seguintes.",
   },
   servers: [{ url: `http://localhost:${config.PORT}`, description: "Local" }],
   tags: [
@@ -40,7 +40,6 @@ export const openApiDocument = {
                   type: "object",
                   properties: {
                     status: { type: "string", example: "ok" },
-                    redis: { type: "string", example: "ok" },
                     db: { type: "string", example: "ok" },
                   },
                 },
@@ -268,7 +267,7 @@ export const openApiDocument = {
         tags: ["Auth"],
         summary: "Login na AVEC",
         description:
-          "Procura no Redis uma sessao Puppeteer aberta para o `slug`. Se existir e o usuario " +
+          "Procura no banco uma sessao Puppeteer aberta para o `slug`. Se existir e o usuario " +
           "continuar logado, a sessao e reaproveitada (`reused: true`). Caso contrario abre um " +
           "novo Chromium com um IP novo e faz login em `https://admin.avec.beauty/{slug}/admin`. " +
           "O proxy vem da tabela `customers_bridget` (uma zone Bright Data por slug); se o slug " +

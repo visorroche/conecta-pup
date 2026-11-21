@@ -7,8 +7,6 @@ const bool = z
 
 const schema = z.object({
   PORT: z.coerce.number().int().positive().default(3100),
-  REDIS_URL: z.string().default("redis://127.0.0.1:6379"),
-
   // Banco onde fica a tabela customers_bridget (uma "ponte" Bright Data por cliente)
   DB_HOST: z.string().min(1),
   DB_PORT: z.coerce.number().int().positive().default(3306),

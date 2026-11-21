@@ -4,7 +4,6 @@ import { config } from "./config.js";
 import { ensureSchema, pool } from "./db.js";
 import { logger } from "./logger.js";
 import { openApiDocument } from "./openapi.js";
-import { redis } from "./redis.js";
 import { authRouter } from "./routes/auth.js";
 import { callLogMiddleware } from "./services/call-log.js";
 import { comandasRouter } from "./routes/comandas.js";
@@ -16,22 +15,14 @@ app.disable("x-powered-by");
 app.use(express.json({ limit: "100kb" }));
 
 app.get("/health", async (_req, res) => {
-  let redisStatus = "ok";
-  try {
-    await redis.ping();
-  } catch {
-    redisStatus = "down";
-  }
   let dbStatus = "ok";
   try {
     await pool.query("SELECT 1");
   } catch {
     dbStatus = "down";
   }
-  const healthy = redisStatus === "ok" && dbStatus === "ok";
-  res
-    .status(healthy ? 200 : 503)
-    .json({ status: healthy ? "ok" : "degraded", redis: redisStatus, db: dbStatus });
+  const healthy = dbStatus === "ok";
+  res.status(healthy ? 200 : 503).json({ status: healthy ? "ok" : "degraded", db: dbStatus });
 });
 
 app.get("/docs.json", (_req, res) => {
@@ -66,7 +57,6 @@ async function shutdown(signal: string) {
   logger.info({ signal }, "shutting_down");
   server.close();
   await shutdownSessions();
-  redis.disconnect();
   await pool.end().catch(() => undefined);
   process.exit(0);
 }

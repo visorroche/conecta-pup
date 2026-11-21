@@ -2,7 +2,7 @@
 
 API Node/TypeScript que simula acessos a plataforma **AVEC** (SaaS B2B) abrindo um Chromium via Puppeteer, como se fosse um usuario no navegador.
 
-- Uma sessao de navegador por `slug`, guardada no **Redis**. Se o slug ja tem sessao aberta, ela e reaproveitada; senao uma nova e criada.
+- Uma sessao de navegador por `slug`, guardada no banco (coluna `session_data` de `customers_bridget`). Se o slug ja tem sessao aberta, ela e reaproveitada; senao uma nova e criada.
 - Cada cliente (slug) tem uma **ponte** na tabela `customers_bridget`: uma zone ISP dedicada na Bright Data, criada pela API deles no primeiro login. Usamos a Bright Data direto, sem passar pelo `avec-GO-tls`. A sessao ainda carrega um `-session-<sessionId>` no username do proxy.
 - Clientes com `active = false` na tabela nao conseguem novos logins (403).
 - Documentacao interativa (Swagger): http://localhost:3100/docs (JSON em `/docs.json`).
@@ -10,19 +10,16 @@ API Node/TypeScript que simula acessos a plataforma **AVEC** (SaaS B2B) abrindo 
 ## Requisitos
 
 - Node 20+
-- Redis (`brew install redis`)
 - MySQL/MariaDB com acesso de escrita (a tabela `customers_bridget` e criada ao subir a API)
 - API key da Bright Data (`BRD_API_KEY`), usada para criar uma zone por cliente
 
 ## Como rodar
 
-Pelo `.vscode/sessions.json` (extensao Terminal Keeper), que abre um terminal para o Redis (`:6379`) e outro para a API (`:3100`).
+Pelo `.vscode/sessions.json` (extensao Terminal Keeper), que abre um terminal para a API (`:3100`).
 
 Ou manualmente:
 
 ```bash
-redis-server --port 6379
-
 cd puppeter
 npm install
 cp .env.example .env   # preencha DB_* e BRD_API_KEY
@@ -35,7 +32,7 @@ Para testar local sem proxy, use `PROXY_ENABLED=false` no `.env` (o Chromium sai
 
 | Metodo | Rota          | Descricao                                                        |
 | ------ | ------------- | ---------------------------------------------------------------- |
-| GET    | `/health`     | Status do servico e do Redis                                     |
+| GET    | `/health`     | Status do servico e do banco                                     |
 | POST   | `/auth/login` | Login na AVEC (`admin.avec.beauty/{slug}/admin`) com IP por sessao |
 | GET    | `/relatorios/{codigo}` | Consulta um relatorio da AVEC (`/admin/relatorio/{codigo}`) e devolve as linhas |
 | GET    | `/comandas`   | Consulta uma comanda por data e numero (itens e pagamentos)      |
@@ -226,11 +223,11 @@ IPs fora do Brasil: o ELB da AVEC (`awselb`) respondeu `403` para IPs dos EUA (L
 
 Comportamento da sessao:
 
-- Slug sem sessao no Redis: abre um Chromium novo com IP novo e faz login.
+- Slug sem sessao no banco: abre um Chromium novo com IP novo e faz login.
 - Slug com sessao viva e mesmo e-mail ja logado: reaproveita (`reused: true`) sem logar de novo.
 - Slug com sessao viva e outro e-mail: descarta a sessao e abre outra com IP novo.
 - Login com falha (401/502): a sessao e descartada para a proxima tentativa comecar com outro IP.
-- A sessao expira no Redis apos `SESSION_TTL_SECONDS` sem uso.
+- A sessao expira (Chromium fechado) apos `SESSION_TTL_SECONDS` sem uso.
 
 ## Log de chamadas e bloqueios
 
@@ -277,11 +274,11 @@ As gravacoes sao assincronas e nao interrompem a chamada se o banco falhar. Resp
 
 ## Variaveis de ambiente
 
-Veja `.env.example`. As principais: `PORT`, `REDIS_URL`, `DB_*`, `PROXY_ENABLED`, `BRD_API_KEY`, `BRD_HOST`, `BRD_PORT`, `BRD_ZONE_IPS`, `BRD_MAX_BRIDGES`, `PUPPETEER_HEADLESS`, `SESSION_TTL_SECONDS`.
+Veja `.env.example`. As principais: `PORT`, `DB_*`, `PROXY_ENABLED`, `BRD_API_KEY`, `BRD_HOST`, `BRD_PORT`, `BRD_ZONE_IPS`, `BRD_MAX_BRIDGES`, `PUPPETEER_HEADLESS`, `SESSION_TTL_SECONDS`.
 
 ## Seguranca
 
-Senhas de login nunca sao logadas nem gravadas. As credenciais do proxy ficam apenas em `customers_bridget` (nunca no Redis nem nos logs). O `.env` esta no `.gitignore`.
+Senhas de login nunca sao logadas nem gravadas. As credenciais do proxy ficam apenas em `customers_bridget` (nunca nos logs). O `.env` esta no `.gitignore`.
 
 ## Scripts
 
