@@ -48,6 +48,8 @@ jobs:
             command -v git >/dev/null || { apt-get update -qq && apt-get install -y -qq git curl; }
 
             mkdir -p /var/www
+            # o diretorio pertence ao usuario "pup"; o root precisa confiar nele
+            git config --global --add safe.directory "$APP_DIR" || true
             if [ ! -d "$APP_DIR/.git" ]; then
               git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"
             else
