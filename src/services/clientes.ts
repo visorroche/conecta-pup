@@ -129,11 +129,11 @@ function fromModal(m: ModalData, row: ListRow | null, salaoId: number): Cliente 
     email: m.email.trim() || null,
     ...(row?.foto ? { foto: row.foto } : {}),
     datanasc: isoDate(m.datanasc),
-    telefone: m.telefoneRaw,
+    telefone: m.telefoneRaw.replace(/\D/g, ""),
     celular: m.celularRaw,
     operadora: /^op\.?$/i.test(m.operadora.trim()) ? "" : m.operadora,
     rg: m.rg,
-    cpf: m.cpfRaw,
+    cpf: m.cpfRaw.replace(/\D/g, ""),
     profissao: m.profissao,
     como_conheceu: m.como_conheceu,
     sexo: m.sexo,
@@ -286,15 +286,15 @@ async function readModal(page: Page, index: number): Promise<ModalData | null> {
   return data;
 }
 
-/**
- * Busca clientes em https://admin.avec.beauty/admin/clientes pela barra de busca
- * (tipos: Nome, E-mail, Telefone, CPF, Codigo de Cadastro) e le o cadastro completo de
- * cada resultado no modal de edicao. Somente leitura.
- */
-export async function searchClientes(
+type RunSearchResult =
+  | { ok: true; total: number; rows: ListRow[] }
+  | { ok: false; reason: "session_expired" | "timeout"; message: string };
+
+/** Faz a busca na barra de /admin/clientes e le as linhas da tabela (sem abrir cadastros). */
+async function runSearch(
   page: Page,
-  input: { type: ClienteSearchType; value: string; limit: number; salaoId: number },
-): Promise<SearchClientesResult> {
+  input: { type: ClienteSearchType; value: string; limit: number },
+): Promise<RunSearchResult> {
   const timeout = config.LOGIN_TIMEOUT_MS;
   const typeIdx = SEARCH_TYPE_INDEX[input.type];
 
@@ -377,10 +377,24 @@ export async function searchClientes(
 
   const total = (matched as { recordsFiltered: number } | null)?.recordsFiltered ?? 0;
   const rows = ((await page.evaluate(LIST_ROWS_JS)) as ListRow[]).slice(0, input.limit);
+  return { ok: true, total, rows };
+}
+
+/**
+ * Busca clientes em https://admin.avec.beauty/admin/clientes pela barra de busca
+ * (tipos: Nome, E-mail, Telefone, CPF, Codigo de Cadastro) e le o cadastro completo de
+ * cada resultado no modal de edicao. Somente leitura.
+ */
+export async function searchClientes(
+  page: Page,
+  input: { type: ClienteSearchType; value: string; limit: number; salaoId: number },
+): Promise<SearchClientesResult> {
+  const found = await runSearch(page, input);
+  if (!found.ok) return found;
 
   const clientes: Partial<Cliente>[] = [];
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i]!;
+  for (let i = 0; i < found.rows.length; i++) {
+    const row = found.rows[i]!;
     const modal = await readModal(page, i);
     if (modal) clientes.push(fromModal(modal, row, input.salaoId));
     else {
@@ -388,5 +402,251 @@ export async function searchClientes(
       clientes.push(fromRow(row, input.salaoId));
     }
   }
-  return { ok: true, total, clientes };
+  return { ok: true, total: found.total, clientes };
+}
+
+// ---------------------------------------------------------------------------
+// Cadastro de cliente ("Adicionar Cliente")
+// ---------------------------------------------------------------------------
+
+export interface NovoCliente {
+  nome: string;
+  /** dd/mm/aaaa */
+  datanasc?: string;
+  /** somente digitos (DDD + numero) */
+  celular?: string;
+  telefone?: string;
+  operadora?: string;
+  sexo?: "M" | "F" | "O" | "P";
+  /** somente digitos */
+  cpf?: string;
+  rg?: string;
+  email?: string;
+  /** somente digitos */
+  cep?: string;
+  /** UF */
+  estado?: string;
+  cidade?: string;
+  cod_cidade?: string;
+  bairro?: string;
+  endereco?: string;
+  numero?: number;
+  obs?: string;
+  como_conheceu?: string;
+  profissao?: string;
+  email_mkt?: boolean;
+  agendamento_online?: boolean;
+  emissao_nota?: boolean;
+  aceita_atendimento_ia?: boolean;
+  aceita_comunicacao_whatsapp?: boolean;
+}
+
+export type CreateClienteResult =
+  | { ok: true; id?: number; codigo?: number }
+  | { ok: false; reason: "session_expired" | "timeout" | "rejected" | "invalid_city"; message: string };
+
+const MODAL = ".modal.popupCli ";
+
+const norm = (v: string): string =>
+  v
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+
+/** Preenche um campo pelo seletor. `events=false` mantem o valor exatamente como enviado (sem mascara). */
+async function setField(page: Page, selector: string, value: string, events = true): Promise<void> {
+  await page.evaluate(
+    `(() => {
+      const i = document.querySelector(${JSON.stringify(MODAL + selector)});
+      if (!i) return;
+      i.focus();
+      i.value = ${JSON.stringify(value)};
+      ${events ? "for (const t of ['input', 'keyup', 'change', 'blur']) i.dispatchEvent(new Event(t, { bubbles: true }));" : ""}
+    })()`,
+  );
+}
+
+async function setCheckbox(page: Page, selector: string, checked: boolean): Promise<void> {
+  await page.evaluate(
+    `(() => {
+      const i = document.querySelector(${JSON.stringify(MODAL + selector)});
+      if (i && i.checked !== ${checked}) i.click();
+    })()`,
+  );
+}
+
+async function waitFor(page: Page, expr: string, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if ((await page.evaluate(expr)) === true) return true;
+    await sleep(250);
+  }
+  return false;
+}
+
+async function closeForm(page: Page): Promise<void> {
+  await page.evaluate(`(() => { const b = document.querySelector('#btnCancelar'); if (b) b.click(); })()`).catch(() => undefined);
+  await sleep(500);
+  if (await modalVisible(page)) await page.evaluate(FORCE_CLOSE_JS).catch(() => undefined);
+}
+
+/**
+ * Cadastra um cliente em /admin/clientes: clica em "Adicionar Cliente", preenche o
+ * formulario e salva. Depois busca o cliente criado para devolver o id.
+ */
+export async function createCliente(
+  page: Page,
+  input: { cliente: NovoCliente; salaoId: number },
+): Promise<CreateClienteResult> {
+  const c = input.cliente;
+  const timeout = config.LOGIN_TIMEOUT_MS;
+
+  await page.goto(`${config.AVEC_ADMIN_BASE}/admin/clientes`, { waitUntil: "domcontentloaded", timeout });
+  try {
+    await page.waitForSelector("#btn-add-client", { visible: true, timeout: 20_000 });
+  } catch {
+    return {
+      ok: false,
+      reason: "session_expired",
+      message: "Nao foi possivel abrir a lista de clientes; a sessao pode ter expirado. Faca login novamente.",
+    };
+  }
+  await sleep(600);
+  await page.evaluate(`document.querySelector('#btn-add-client').click()`);
+  const opened = await waitFor(
+    page,
+    `!!(document.querySelector('.modal.popupCli #nome') && document.querySelector('.modal.popupCli #nome').offsetWidth > 0 && document.querySelector('#btnSalvarForm'))`,
+    25_000,
+  );
+  if (!opened) return { ok: false, reason: "timeout", message: "O formulario de cliente nao abriu" };
+  await sleep(800);
+
+  try {
+    // CEP primeiro: a plataforma busca o endereco sozinha e sobrescreve os campos de endereco
+    if (c.cep) {
+      await setField(page, "#cep", c.cep.replace(/^(\d{5})(\d{3})$/, "$1-$2"));
+      await waitFor(page, `document.querySelector('.modal.popupCli #endereco').value !== ''`, 5_000);
+      await sleep(1_000);
+    }
+
+    if (c.estado) {
+      await page.select(MODAL + "#estado", c.estado);
+      const loaded = await waitFor(
+        page,
+        `document.querySelectorAll('.modal.popupCli #cod_cidade option').length > 2`,
+        10_000,
+      );
+      if (!loaded) return { ok: false, reason: "timeout", message: "A plataforma nao carregou as cidades do estado" };
+      if (c.cidade || c.cod_cidade) {
+        const options = (await page.evaluate(
+          `[...document.querySelectorAll('.modal.popupCli #cod_cidade option')].map((o) => [o.value, o.text])`,
+        )) as [string, string][];
+        const wanted = c.cod_cidade
+          ? options.find(([v]) => v === c.cod_cidade)
+          : options.find(([, t]) => norm(t) === norm(c.cidade!));
+        if (!wanted || !wanted[0]) {
+          return {
+            ok: false,
+            reason: "invalid_city",
+            message: `Cidade nao encontrada no estado ${c.estado}`,
+          };
+        }
+        await page.select(MODAL + "#cod_cidade", wanted[0]);
+        await sleep(600);
+      }
+    }
+
+    await setField(page, "#nome", c.nome);
+    if (c.datanasc) await setField(page, "#datanasc", c.datanasc);
+    // celular/telefone/cpf: sem eventos para ir ao servidor so com digitos (como a API antiga)
+    if (c.celular) await setField(page, "#celular", c.celular, false);
+    if (c.telefone) await setField(page, "#telefoneCliente", c.telefone, false);
+    if (c.operadora) await page.select(MODAL + 'select[name="operadora"]', c.operadora);
+    if (c.sexo) await page.evaluate(`(() => { const r = document.querySelector('.modal.popupCli input[name="sexo"][value="${c.sexo}"]'); if (r) r.click(); })()`);
+    if (c.cpf) await setField(page, "#cpf", c.cpf, false);
+    if (c.rg) await setField(page, "#rg", c.rg);
+    if (c.email) await setField(page, "#email", c.email);
+    if (c.bairro !== undefined && c.bairro !== "") await setField(page, "#bairro", c.bairro);
+    if (c.endereco !== undefined && c.endereco !== "") await setField(page, "#endereco", c.endereco);
+    if (c.numero !== undefined) await setField(page, "#numero", String(c.numero));
+    if (c.profissao) await setField(page, "#profissao", c.profissao);
+    if (c.obs) await setField(page, 'textarea[name="obs"]', c.obs);
+    if (c.como_conheceu) {
+      await page.evaluate(
+        `(() => {
+          const s = document.querySelector('.modal.popupCli #como_conheceu').selectize;
+          if (!s) return;
+          s.addOption({ nome: ${JSON.stringify(c.como_conheceu)} });
+          s.addItem(${JSON.stringify(c.como_conheceu)});
+        })()`,
+      );
+    }
+    const boxes: [string, boolean | undefined][] = [
+      ["#email_mkt", c.email_mkt],
+      ["#agendamento_online", c.agendamento_online],
+      ["#emissao_nota", c.emissao_nota],
+      ["#aceita_atendimento_ia", c.aceita_atendimento_ia],
+      ["#aceita_comunicacao_whatsapp", c.aceita_comunicacao_whatsapp],
+    ];
+    for (const [sel, v] of boxes) if (v !== undefined) await setCheckbox(page, sel, v);
+
+    // Salvar: espera a resposta de /admin/clientes/grava (ou o aviso de validacao da tela)
+    let gravaBody: { sucesso?: boolean; msg?: string } | null = null;
+    const onResponse = async (res: PupResponse): Promise<void> => {
+      if (res.request().method() !== "POST" || !/\/admin\/clientes\/grava(\?|$)/.test(res.url())) return;
+      try {
+        gravaBody = (await res.json()) as { sucesso?: boolean; msg?: string };
+      } catch {
+        gravaBody = { sucesso: false, msg: "Resposta ilegivel da plataforma" };
+      }
+    };
+    page.on("response", onResponse);
+    try {
+      await page.evaluate(`document.querySelector('#btnSalvarForm').click()`);
+      const deadline = Date.now() + 30_000;
+      let alertMsg = "";
+      while (!gravaBody && !alertMsg && Date.now() < deadline) {
+        await sleep(300);
+        alertMsg = ((await page.evaluate(
+          `(() => { const a = [...document.querySelectorAll('.alert.error')].find((e) => e.offsetWidth > 0); return a ? a.innerText.trim() : ''; })()`,
+        )) as string).trim();
+      }
+      const body = gravaBody as { sucesso?: boolean; msg?: string } | null;
+      if (!body && !alertMsg) return { ok: false, reason: "timeout", message: "A plataforma nao respondeu ao cadastro" };
+      if (!body || body.sucesso !== true) {
+        const raw = (body?.msg || alertMsg || "Cadastro recusado").trim();
+        return { ok: false, reason: "rejected", message: raw };
+      }
+    } finally {
+      page.off("response", onResponse);
+    }
+    await sleep(1_500);
+  } finally {
+    await closeForm(page);
+  }
+
+  // Descobre o id do cliente criado: o mais novo (maior codigo) entre os que casam com a busca
+  const byValue: [ClienteSearchType, string] | null = c.celular
+    ? ["celular", c.celular]
+    : c.email
+      ? ["email", c.email]
+      : c.cpf
+        ? ["cpf", c.cpf]
+        : ["nome", c.nome];
+  try {
+    const found = await runSearch(page, { type: byValue[0], value: byValue[1], limit: 50 });
+    if (!found.ok || found.rows.length === 0) return { ok: true };
+    const sameName = found.rows
+      .map((row, index) => ({ row, index }))
+      .filter(({ row }) => norm(clean(row.nome)) === norm(clean(c.nome)));
+    const candidates = sameName.length ? sameName : found.rows.map((row, index) => ({ row, index }));
+    const newest = candidates.reduce((a, b) => (toInt(b.row.codigo) > toInt(a.row.codigo) ? b : a));
+    const modal = await readModal(page, newest.index);
+    if (!modal?.id) return { ok: true, codigo: toInt(newest.row.codigo) };
+    return { ok: true, id: Number(modal.id), codigo: toInt(newest.row.codigo) };
+  } catch (err) {
+    logger.warn({ err }, "cliente_criado_sem_id");
+    return { ok: true };
+  }
 }

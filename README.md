@@ -46,6 +46,7 @@ Padrao de resposta (igual ao da API antiga "Mid"):
 | POST   | `/api/auth/login`                                       | Login (abre/reaproveita a sessao do salao)                        |
 | GET    | `/api/auth/user-profile`                                | Usuario do token                                                  |
 | GET    | `/api/mid/avec/salao/{salao_id}/cliente?chave=&valor=`  | Busca clientes (celular, telefone, cpf, email, codigo, nome)      |
+| POST   | `/api/mid/avec/salao/{salao_id}/cliente`                | Cadastra um cliente (grava de verdade)                            |
 | GET    | `/api/mid/avec/salao/{salao_id}/comanda/{numero}?data=` | Consulta uma comanda (itens e pagamentos)                         |
 | POST   | `/api/mid/avec/salao/{salao_id}/comandas`               | Abre uma comanda (grava de verdade)                               |
 | GET    | `/api/mid/avec/salao/{salao_id}/relatorio/{codigo}?...` | Linhas de um relatorio; query params = filtros do relatorio       |
@@ -78,6 +79,18 @@ curl -H "Authorization: Bearer $TOKEN" "http://localhost:3100/api/mid/avec/salao
 ```
 
 `chave`: `celular`, `telefone`, `cpf`, `email`, `codigo` ou `nome` (os mesmos tipos da barra de busca de `/admin/clientes`). Resposta (200): `{ "code": 200, "data": { "salonClient": [ { id, salao_id, codigo, nome, email, celular, cpf, ... } ], "total": 1 } }` — nomes de campos como na API antiga, mas so vem o que a plataforma informa (campos que ela nao tem, como `estrelas`, `favorito` ou `apelido`, nao aparecem). Sem resultado: `salonClient: []`. Devolve o cadastro completo de ate `limit` clientes (padrao 10, maximo 50); `total` e quantos casam com a busca. Somente leitura (alguns segundos por cliente).
+
+### `POST /api/mid/avec/salao/{salao_id}/cliente`
+
+Requer login previo. **Grava um cliente real.**
+
+```bash
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"nome":"Maria Silva","celular":"11999999999","datanasc":"1990-06-09","sexo":"F"}' \
+  http://localhost:3100/api/mid/avec/salao/107521/cliente
+```
+
+Apenas `nome` e obrigatorio. Campos como na API antiga: `email`, `datanasc` (`aaaa-mm-dd` ou `dd/mm/aaaa`), `celular`, `telefone`, `operadora`, `sexo` (`M`, `F`, `O`, `P`), `cpf`, `rg`, `profissao`, `como_conheceu`, `cep`, `estado` (UF), `cidade` (nome) ou `cod_cidade`, `bairro`, `endereco`, `numero`, `obs`, mais as opcoes `email_mkt`, `agendamento_online`, `emissao_nota`, `aceita_atendimento_ia` e `aceita_comunicacao_whatsapp` (padrao `true`). `apelido` e `complemento` sao aceitos e ignorados (a plataforma nao os grava). Telefones, CPF e CEP aceitam o valor formatado ou so digitos. Cidade exige `estado`. Resposta (200): `{ "code": 200, "data": { "id", "codigo" } }`. Erros: 400 parametros invalidos, 422 recusado (ex.: cidade nao encontrada no estado), 504 tempo esgotado.
 
 ### `GET /api/mid/avec/salao/{salao_id}/comanda/{numero}?data=`
 

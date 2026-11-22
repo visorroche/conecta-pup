@@ -257,6 +257,71 @@ export const openApiDocument = {
           "504": errorResponse("Tempo esgotado", 504, "A plataforma nao respondeu a busca de clientes"),
         },
       },
+
+      post: {
+        security: [{ bearerAuth: [] }],
+        tags: ["Clientes"],
+        summary: "Cadastrar cliente",
+        description:
+          "Usa a sessao ja logada do salao. Cadastra o cliente e devolve o `id` (e o `codigo`) do cadastro criado. " +
+          "Somente `nome` e obrigatorio. `datanasc` aceita `aaaa-mm-dd` ou `dd/mm/aaaa`; `celular`, `telefone`, " +
+          "`cpf` e `cep` aceitam o valor com ou sem formatacao e sao gravados so com digitos (o `cep` fica com hifen). " +
+          "Para informar a cidade, envie tambem o `estado` (UF) e a `cidade` pelo nome ou o `cod_cidade`. " +
+          "Se enviar `cep`, a plataforma completa estado, cidade, bairro e endereco que nao forem informados. " +
+          "`apelido` e `complemento` sao aceitos mas ignorados (a plataforma nao os grava). " +
+          "Grava de verdade e pode levar alguns segundos.",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["nome"],
+                properties: {
+                  nome: { type: "string", example: "Maria Silva" },
+                  email: { type: "string", example: "maria@exemplo.com" },
+                  datanasc: { type: "string", example: "1990-06-09" },
+                  celular: { type: "string", example: "11999999999" },
+                  telefone: { type: "string", example: "1133334444" },
+                  operadora: { type: "string", enum: ["Claro", "Nextel", "Oi", "Tim", "Vivo", "Porto Conecta"] },
+                  sexo: { type: "string", enum: ["M", "F", "O", "P"], description: "M, F, O (outro) ou P (prefiro nao dizer, padrao)" },
+                  cpf: { type: "string", example: "52998224725" },
+                  rg: { type: "string" },
+                  profissao: { type: "string" },
+                  como_conheceu: { type: "string", example: "Google" },
+                  cep: { type: "string", example: "01310100" },
+                  estado: { type: "string", example: "SP" },
+                  cidade: { type: "string", example: "Sao Paulo" },
+                  cod_cidade: { type: "string", example: "3550308" },
+                  bairro: { type: "string", maxLength: 29 },
+                  endereco: { type: "string" },
+                  numero: { type: "integer", example: 100 },
+                  obs: { type: "string" },
+                  email_mkt: { type: "boolean", description: "Campanhas de e-mail (padrao: true)" },
+                  agendamento_online: { type: "boolean", description: "Padrao: true" },
+                  emissao_nota: { type: "boolean", description: "Padrao: true" },
+                  aceita_atendimento_ia: { type: "boolean", description: "Padrao: true" },
+                  aceita_comunicacao_whatsapp: { type: "boolean", description: "Padrao: true" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "200": okResponse("Cliente cadastrado", {
+            type: "object",
+            properties: {
+              id: { type: "integer", example: 128708197 },
+              codigo: { type: "integer", example: 88888960 },
+            },
+          }),
+          "400": errorResponse("Parametros invalidos", 400, "Parametros invalidos"),
+          ...sessionErrors,
+          "404": errorResponse("Salao nao encontrado", 404, "Salao 1 nao encontrado"),
+          "422": errorResponse("Cadastro recusado (ex.: cidade nao encontrada no estado)", 422, "Cidade nao encontrada no estado SP"),
+          "504": errorResponse("Tempo esgotado", 504, "A plataforma nao respondeu ao cadastro"),
+        },
+      },
     },
 
     "/api/mid/avec/salao/{salao_id}/comandas": {
