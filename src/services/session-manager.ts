@@ -74,6 +74,7 @@ function releaseLock(slug: string, token: string): void {
 const memSessions = new Map<string, StoredSession>();
 
 function isExpired(stored: StoredSession): boolean {
+  if (config.SESSION_TTL_SECONDS === 0) return false; // sem expiracao por inatividade
   const last = Date.parse(stored.lastUsedAt);
   return Number.isFinite(last) && Date.now() - last > config.SESSION_TTL_SECONDS * 1000;
 }

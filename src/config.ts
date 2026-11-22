@@ -32,11 +32,12 @@ const schema = z.object({
 
   AVEC_ADMIN_BASE: z.string().url().default("https://admin.avec.beauty"),
   PUPPETEER_HEADLESS: bool.default(true),
-  SESSION_TTL_SECONDS: z.coerce.number().int().positive().default(1800),
+  // Segundos de inatividade ate fechar o Chromium do salao. 0 = nunca (so cai se a conexao fechar)
+  SESSION_TTL_SECONDS: z.coerce.number().int().nonnegative().default(0),
   // Segredo (HS256) para assinar os tokens JWT emitidos no login. Use algo longo e aleatorio.
   JWT_SECRET: z.string().min(32, "JWT_SECRET precisa ter pelo menos 32 caracteres"),
-  // Validade do token (a API antiga usava 3600)
-  JWT_TTL_SECONDS: z.coerce.number().int().positive().default(3600),
+  // Validade do token em segundos. Padrao: 10 anos (na pratica o token so cai quando a sessao fecha)
+  JWT_TTL_SECONDS: z.coerce.number().int().positive().default(315_360_000),
   LOGIN_TIMEOUT_MS: z.coerce.number().int().positive().default(45000),
 });
 

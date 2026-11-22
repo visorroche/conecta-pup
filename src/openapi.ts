@@ -133,7 +133,7 @@ export const openApiDocument = {
             properties: {
               access_token: { type: "string", example: "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9..." },
               token_type: { type: "string", example: "bearer" },
-              expires_in: { type: "integer", example: 3600, description: "Validade do token em segundos" },
+              expires_in: { type: "integer", example: 315360000, description: "Validade do token em segundos (10 anos; o token cai antes se a sessao for encerrada)" },
               user: {
                 type: "object",
                 properties: {

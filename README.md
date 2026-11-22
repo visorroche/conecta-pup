@@ -35,8 +35,9 @@ Padrao de resposta (igual ao da API antiga "Mid"):
 - Sucesso: `{ "code": 200, "data": { ... } }`
 - Erro: `{ "code": 404, "message": "...", "file": null, "line": null, "trace": null }` (validacao traz tambem `errors: [{ path, message }]`; filtro de relatorio invalido traz `filtros_disponiveis`).
 - O codigo interno do erro (`client_not_found`, `session_busy`, ...) nao vai no corpo; fica em `api_call_log.error_code`.
-- **Autenticacao:** so `POST /api/auth/login` e `/health`/`/docs` sao abertos. O login devolve um JWT (HS256, `JWT_SECRET`, validade `JWT_TTL_SECONDS`, padrao 3600s) e todas as outras rotas exigem `Authorization: Bearer <access_token>`.
+- **Autenticacao:** so `POST /api/auth/login` e `/health`/`/docs` sao abertos. O login devolve um JWT (HS256, `JWT_SECRET`, validade `JWT_TTL_SECONDS`, padrao 10 anos) e todas as outras rotas exigem `Authorization: Bearer <access_token>`.
 - O token vale para **um salao** (o `salao_id` do caminho precisa ser o do token, senao 403) e para **a sessao aberta no login**: se a sessao for encerrada ou trocada (outro usuario fez login no mesmo salao), o token antigo da 401 e e preciso logar de novo.
+- **Duracao:** nem o token (10 anos) nem a sessao (`SESSION_TTL_SECONDS=0`, sem expiracao por inatividade) tem prazo curto. O token so deixa de valer quando a sessao cai: Chromium/conexao fechada, login encerrado pela plataforma, ou restart/deploy da API. Nesses casos a rota responde 401 e basta chamar o login de novo.
 - Erros de token: 401 (`Token nao informado`, `Token invalido`, `Token expirado`), 403 (`Token nao pertence a este salao`).
 
 | Metodo | Rota                                                    | Descricao                                                         |
@@ -60,7 +61,7 @@ Convencoes herdadas da API antiga: colecao no plural (`/comandas`), item por id 
 `slug` e obrigatorio no primeiro acesso; depois basta `salao_id`. Resposta (mesmo formato da API antiga):
 
 ```json
-{ "code": 200, "data": { "access_token": "eyJ0eXAi...", "token_type": "bearer", "expires_in": 3600,
+{ "code": 200, "data": { "access_token": "eyJ0eXAi...", "token_type": "bearer", "expires_in": 315360000,
   "user": { "salao_id": 107521, "slug": "meu-salao", "nome": "MEU SALAO", "email": "gestor@salao.com" }, "reused": false } }
 ```
 
