@@ -44,8 +44,12 @@ const salaoIdParam = {
 };
 
 const sessionErrors = {
-  "401": errorResponse("Sem sessao ativa ou sessao expirada", 401, "Sessao nao encontrada. Faca login em POST /api/auth/login primeiro."),
-  "403": errorResponse("Cliente desativado", 403, "Cliente desativado"),
+  "401": errorResponse(
+    "Token ausente, invalido ou expirado; ou sessao encerrada (faca login de novo)",
+    401,
+    "Token invalido",
+  ),
+  "403": errorResponse("Token de outro salao, ou cliente desativado", 403, "Token nao pertence a este salao"),
   "404": errorResponse("Salao nao encontrado", 404, "Salao 424242 nao encontrado"),
   "409": errorResponse("Ja existe uma operacao em andamento para o salao", 409, "Ja existe uma operacao em andamento para este salao"),
   "502": errorResponse("Falha ao executar a operacao", 502, "Falha ao executar a operacao"),
@@ -59,9 +63,15 @@ export const openApiDocument = {
     description:
       "API de integracao para consulta de comandas e relatorios e abertura de comandas. " +
       "Respostas no formato `{ code, data }`; erros no formato `{ code, message, file, line, trace }`. " +
-      "Faca `POST /api/auth/login` primeiro; as demais rotas reaproveitam a sessao aberta do salao.",
+      "Faca `POST /api/auth/login` e envie o `access_token` retornado em `Authorization: Bearer <token>` nas demais rotas. " +
+      "O token vale para um salao (`salao_id` do caminho precisa ser o mesmo) e para a sessao aberta no login.",
   },
   servers: [{ url: "/" }],
+  components: {
+    securitySchemes: {
+      bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" },
+    },
+  },
   tags: [
     { name: "Auth", description: "Autenticacao" },
     { name: "Comandas", description: "Comandas do salao" },
@@ -121,9 +131,18 @@ export const openApiDocument = {
           "200": okResponse("Login realizado (ou sessao reaproveitada)", {
             type: "object",
             properties: {
-              salao_id: { type: "integer", nullable: true, example: 107521 },
-              slug: { type: "string", example: "les-sens-experience-byd" },
-              nome: { type: "string", nullable: true, example: "LES SENS EXPÉRIENCE - BYD" },
+              access_token: { type: "string", example: "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9..." },
+              token_type: { type: "string", example: "bearer" },
+              expires_in: { type: "integer", example: 3600, description: "Validade do token em segundos" },
+              user: {
+                type: "object",
+                properties: {
+                  salao_id: { type: "integer", example: 107521 },
+                  slug: { type: "string", example: "les-sens-experience-byd" },
+                  nome: { type: "string", nullable: true, example: "LES SENS EXPÉRIENCE - BYD" },
+                  email: { type: "string", example: "gestor@salao.com" },
+                },
+              },
               reused: { type: "boolean", example: false, description: "true quando continuou uma sessao ja aberta" },
             },
           }),
@@ -142,8 +161,34 @@ export const openApiDocument = {
       },
     },
 
+    "/api/auth/user-profile": {
+      get: {
+        tags: ["Auth"],
+        summary: "Perfil do usuario do token",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          "200": okResponse("Usuario autenticado", {
+            type: "object",
+            properties: {
+              user: {
+                type: "object",
+                properties: {
+                  salao_id: { type: "integer", example: 107521 },
+                  slug: { type: "string", example: "les-sens-experience-byd" },
+                  nome: { type: "string", nullable: true },
+                  email: { type: "string", example: "gestor@salao.com" },
+                },
+              },
+            },
+          }),
+          "401": errorResponse("Token ausente, invalido ou expirado", 401, "Token invalido"),
+        },
+      },
+    },
+
     "/api/mid/avec/salao/{salao_id}/comandas": {
       post: {
+        security: [{ bearerAuth: [] }],
         tags: ["Comandas"],
         summary: "Abrir comanda",
         description:
@@ -203,6 +248,7 @@ export const openApiDocument = {
 
     "/api/mid/avec/salao/{salao_id}/comanda/{numero}": {
       get: {
+        security: [{ bearerAuth: [] }],
         tags: ["Comandas"],
         summary: "Consultar comanda (itens e pagamentos)",
         description:
@@ -281,6 +327,7 @@ export const openApiDocument = {
 
     "/api/mid/avec/salao/{salao_id}/relatorio/{codigo}": {
       get: {
+        security: [{ bearerAuth: [] }],
         tags: ["Relatorios"],
         summary: "Consultar um relatorio",
         description:

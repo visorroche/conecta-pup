@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import { getAuth, requireAuth, tokenSessionMismatch } from "../auth.js";
 import {
   fail,
   handleCommonError,
@@ -55,7 +56,7 @@ const createSchema = z
     path: ["codigo"],
   });
 
-comandasRouter.post(`${BASE}/comandas`, callLogMiddleware, async (req, res) => {
+comandasRouter.post(`${BASE}/comandas`, callLogMiddleware, requireAuth, async (req, res) => {
   const parsed = createSchema.safeParse(req.body);
   if (!parsed.success) {
     invalidParams(res, parsed.error);
@@ -94,6 +95,8 @@ comandasRouter.post(`${BASE}/comandas`, callLogMiddleware, async (req, res) => {
     slug = salao.slug;
 
     const result = await withExistingSession<Outcome>(slug, async ({ browser, stored }) => {
+      const stale = tokenSessionMismatch(getAuth(res), stored.sessionId);
+      if (stale) return stale;
       const page = await getPage(browser, slug!, stored.sessionId);
       const state = await isLoggedIn(page, slug!);
       if (state.kind !== "logged") {
@@ -156,7 +159,7 @@ const getSchema = z.object({
   data: z.string().trim().optional(),
 });
 
-comandasRouter.get(`${BASE}/comanda/:numero`, callLogMiddleware, async (req, res) => {
+comandasRouter.get(`${BASE}/comanda/:numero`, callLogMiddleware, requireAuth, async (req, res) => {
   const parsed = getSchema.safeParse({ numero: req.params.numero, data: req.query.data });
   if (!parsed.success) {
     invalidParams(res, parsed.error);
@@ -176,6 +179,8 @@ comandasRouter.get(`${BASE}/comanda/:numero`, callLogMiddleware, async (req, res
     slug = salao.slug;
 
     const result = await withExistingSession<Outcome>(slug, async ({ browser, stored }) => {
+      const stale = tokenSessionMismatch(getAuth(res), stored.sessionId);
+      if (stale) return stale;
       const page = await getPage(browser, slug!, stored.sessionId);
       const state = await isLoggedIn(page, slug!);
       if (state.kind !== "logged") {

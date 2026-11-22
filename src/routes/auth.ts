@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import { getAuth, requireAuth, signToken } from "../auth.js";
 import { config } from "../config.js";
 import { fail, handleCommonError, invalidParams, ok } from "../http.js";
 import { noteCall, callLogMiddleware } from "../services/call-log.js";
@@ -79,7 +80,7 @@ authRouter.post("/auth/login", callLogMiddleware, async (req, res) => {
             }
             stored.lastUsedAt = new Date().toISOString();
             await saveStored(stored);
-            return { ok: true as const, data: payload(slug!, true, client) };
+            return { ok: true as const, sid: stored.sessionId, client, reused: true };
           }
         }
 
@@ -106,7 +107,7 @@ authRouter.post("/auth/login", callLogMiddleware, async (req, res) => {
         stored.email = email;
         stored.lastUsedAt = new Date().toISOString();
         await saveStored(stored);
-        return { ok: true as const, data: payload(slug!, reused, client) };
+        return { ok: true as const, sid: stored.sessionId, client, reused };
       },
       {
         // outro usuario no mesmo slug: sessao nova
@@ -117,8 +118,25 @@ authRouter.post("/auth/login", callLogMiddleware, async (req, res) => {
       },
     );
 
-    if (result.ok) ok(res, result.data);
-    else fail(res, result.status, result.message, result.error);
+    if (!result.ok) {
+      fail(res, result.status, result.message, result.error);
+      return;
+    }
+
+    // salao_id: rodape da plataforma > cadastro > o que veio no body
+    const saved = await findBridge(slug);
+    const salaoId = result.client?.salaoId ?? saved?.salaoId ?? salaoIdInput ?? null;
+    if (salaoId === null) {
+      fail(res, 502, "Nao foi possivel identificar o salao", "salao_unknown");
+      return;
+    }
+    const nome = result.client?.name ?? saved?.nome ?? null;
+    const token = await signToken({ salaoId, slug, email, sid: result.sid });
+    ok(res, {
+      ...token,
+      user: { salao_id: salaoId, slug, nome, email },
+      reused: result.reused,
+    });
   } catch (err) {
     // falha inesperada: descarta a sessao para a proxima tentativa comecar limpa
     const known = handleCommonError(res, err, { slug }, "login_failed");
@@ -126,15 +144,11 @@ authRouter.post("/auth/login", callLogMiddleware, async (req, res) => {
   }
 });
 
-function payload(
-  slug: string,
-  reused: boolean,
-  client: { salaoId: number; name: string | null } | null,
-) {
-  return {
-    salao_id: client?.salaoId ?? null,
-    slug,
-    nome: client?.name ?? null,
-    reused,
-  };
-}
+/** GET /api/auth/user-profile (exige token) */
+authRouter.get("/auth/user-profile", callLogMiddleware, requireAuth, async (_req, res) => {
+  const auth = getAuth(res);
+  const saved = await findBridge(auth.slug).catch(() => null);
+  ok(res, {
+    user: { salao_id: auth.salaoId, slug: auth.slug, nome: saved?.nome ?? null, email: auth.email },
+  });
+});

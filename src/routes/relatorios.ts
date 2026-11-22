@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
+import { getAuth, requireAuth, tokenSessionMismatch } from "../auth.js";
 import {
   fail,
   handleCommonError,
@@ -33,7 +34,7 @@ const paramsSchema = z.object({
  * Todo query param e repassado como filtro (name do input na tela). Datas aceitam
  * aaaa-mm-dd ou dd/mm/aaaa (como `inicio`/`fim` da API antiga).
  */
-relatoriosRouter.get("/mid/avec/salao/:salao_id/relatorio/:codigo", callLogMiddleware, async (req, res) => {
+relatoriosRouter.get("/mid/avec/salao/:salao_id/relatorio/:codigo", callLogMiddleware, requireAuth, async (req, res) => {
   const params = paramsSchema.safeParse({ codigo: req.params.codigo });
   if (!params.success) {
     invalidParams(res, params.error);
@@ -57,6 +58,8 @@ relatoriosRouter.get("/mid/avec/salao/:salao_id/relatorio/:codigo", callLogMiddl
     slug = salao.slug;
 
     const result = await withExistingSession<Outcome>(slug, async ({ browser, stored }) => {
+      const stale = tokenSessionMismatch(getAuth(res), stored.sessionId);
+      if (stale) return stale;
       const page = await getPage(browser, slug!, stored.sessionId);
       const state = await isLoggedIn(page, slug!);
       if (state.kind !== "logged") {

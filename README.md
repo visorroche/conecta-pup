@@ -35,12 +35,15 @@ Padrao de resposta (igual ao da API antiga "Mid"):
 - Sucesso: `{ "code": 200, "data": { ... } }`
 - Erro: `{ "code": 404, "message": "...", "file": null, "line": null, "trace": null }` (validacao traz tambem `errors: [{ path, message }]`; filtro de relatorio invalido traz `filtros_disponiveis`).
 - O codigo interno do erro (`client_not_found`, `session_busy`, ...) nao vai no corpo; fica em `api_call_log.error_code`.
-- Sem autenticacao Bearer: o `salao_id` no caminho identifica o salao.
+- **Autenticacao:** so `POST /api/auth/login` e `/health`/`/docs` sao abertos. O login devolve um JWT (HS256, `JWT_SECRET`, validade `JWT_TTL_SECONDS`, padrao 3600s) e todas as outras rotas exigem `Authorization: Bearer <access_token>`.
+- O token vale para **um salao** (o `salao_id` do caminho precisa ser o do token, senao 403) e para **a sessao aberta no login**: se a sessao for encerrada ou trocada (outro usuario fez login no mesmo salao), o token antigo da 401 e e preciso logar de novo.
+- Erros de token: 401 (`Token nao informado`, `Token invalido`, `Token expirado`), 403 (`Token nao pertence a este salao`).
 
 | Metodo | Rota                                                    | Descricao                                                         |
 | ------ | ------------------------------------------------------- | ----------------------------------------------------------------- |
 | GET    | `/health`                                               | Status do servico e do banco                                      |
 | POST   | `/api/auth/login`                                       | Login (abre/reaproveita a sessao do salao)                        |
+| GET    | `/api/auth/user-profile`                                | Usuario do token                                                  |
 | GET    | `/api/mid/avec/salao/{salao_id}/comanda/{numero}?data=` | Consulta uma comanda (itens e pagamentos)                         |
 | POST   | `/api/mid/avec/salao/{salao_id}/comandas`               | Abre uma comanda (grava de verdade)                               |
 | GET    | `/api/mid/avec/salao/{salao_id}/relatorio/{codigo}?...` | Linhas de um relatorio; query params = filtros do relatorio       |
@@ -54,11 +57,14 @@ Convencoes herdadas da API antiga: colecao no plural (`/comandas`), item por id 
 { "email": "gestor@salao.com", "password": "minha-senha", "slug": "meu-salao" }
 ```
 
-`slug` e obrigatorio no primeiro acesso; depois basta `salao_id`. Resposta:
+`slug` e obrigatorio no primeiro acesso; depois basta `salao_id`. Resposta (mesmo formato da API antiga):
 
 ```json
-{ "code": 200, "data": { "salao_id": 107521, "slug": "meu-salao", "nome": "MEU SALAO", "reused": false } }
+{ "code": 200, "data": { "access_token": "eyJ0eXAi...", "token_type": "bearer", "expires_in": 3600,
+  "user": { "salao_id": 107521, "slug": "meu-salao", "nome": "MEU SALAO", "email": "gestor@salao.com" }, "reused": false } }
 ```
+
+Use nas demais rotas: `Authorization: Bearer <access_token>`.
 
 - Cria a sessao do salao ou reaproveita a existente (`reused: true`). Erros: 400 (parametros), 401 (credenciais), 403 (cliente desativado), 404 (`salao_id` sem cadastro e sem `slug`), 409 (operacao em andamento), 502 (indisponivel).
 - Primeiro acesso de um slug: provisiona o IP brasileiro do cliente (regras de zona na secao de log/zonas abaixo) e grava `customers_bridget`.
@@ -66,7 +72,7 @@ Convencoes herdadas da API antiga: colecao no plural (`/comandas`), item por id 
 ### `GET /api/mid/avec/salao/{salao_id}/comanda/{numero}?data=`
 
 ```bash
-curl "http://localhost:3100/api/mid/avec/salao/107521/comanda/6?data=2026-11-21"
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:3100/api/mid/avec/salao/107521/comanda/6?data=2026-11-21"
 ```
 
 ```json
@@ -90,7 +96,7 @@ Cliente por `codigo`, `cpf`, `celular` ou `email` (nessa ordem se vierem varios)
 ### `GET /api/mid/avec/salao/{salao_id}/relatorio/{codigo}?<filtros>`
 
 ```bash
-curl "http://localhost:3100/api/mid/avec/salao/107521/relatorio/0123?inicio=01/11/2026&fim=21/11/2026"
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:3100/api/mid/avec/salao/107521/relatorio/0123?inicio=01/11/2026&fim=21/11/2026"
 ```
 
 `data`: `{ codigo, titulo, filtros, totais, colunas, total, linhas: [ { <coluna>: <valor> } ] }`. Todas as linhas (sem paginacao); valores como exibidos (`1.800,00`). Filtro inexistente -> 400 com `filtros_disponiveis`; relatorio inexistente -> 404; relatorio em formato de painel -> 422.
@@ -149,7 +155,7 @@ As gravacoes sao assincronas e nao interrompem a chamada se o banco falhar. Resp
 
 ## Variaveis de ambiente
 
-Veja `.env.example`. As principais: `PORT`, `DB_*`, `PROXY_ENABLED`, `BRD_API_KEY`, `BRD_HOST`, `BRD_PORT`, `BRD_ZONE_IPS`, `BRD_MAX_BRIDGES`, `PUPPETEER_HEADLESS`, `SESSION_TTL_SECONDS`.
+Veja `.env.example`. As principais: `PORT`, `JWT_SECRET`, `JWT_TTL_SECONDS`, `DB_*`, `PROXY_ENABLED`, `BRD_API_KEY`, `BRD_HOST`, `BRD_PORT`, `BRD_ZONE_IPS`, `BRD_MAX_BRIDGES`, `PUPPETEER_HEADLESS`, `SESSION_TTL_SECONDS`.
 
 ## Seguranca
 
