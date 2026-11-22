@@ -5,7 +5,6 @@ import { ensureSchema, pool } from "./db.js";
 import { logger } from "./logger.js";
 import { openApiDocument } from "./openapi.js";
 import { authRouter } from "./routes/auth.js";
-import { callLogMiddleware } from "./services/call-log.js";
 import { comandasRouter } from "./routes/comandas.js";
 import { relatoriosRouter } from "./routes/relatorios.js";
 import { shutdownSessions } from "./services/session-manager.js";
@@ -30,18 +29,28 @@ app.get("/docs.json", (_req, res) => {
 });
 app.use("/docs", swaggerUi.serve, swaggerUi.setup(openApiDocument));
 
-app.use("/auth", callLogMiddleware, authRouter);
-app.use("/comandas", callLogMiddleware, comandasRouter);
-app.use("/relatorios", callLogMiddleware, relatoriosRouter);
+// Rotas no padrao da API antiga: /api/auth/login e /api/mid/avec/salao/{salao_id}/...
+app.use("/api", authRouter, comandasRouter, relatoriosRouter);
+
+// Rota inexistente (mesmo formato/mensagem da API antiga)
+app.use((req: Request, res: Response) => {
+  res.status(404).json({
+    code: 404,
+    message: `The route ${req.path.replace(/^\//, "")} could not be found.`,
+    file: null,
+    line: null,
+    trace: null,
+  });
+});
 
 // JSON invalido e demais erros
 app.use((err: Error & { type?: string }, _req: Request, res: Response, _next: NextFunction) => {
   if (err.type === "entity.parse.failed") {
-    res.status(400).json({ error: "invalid_json", message: "Body JSON invalido" });
+    res.status(400).json({ code: 400, message: "Body JSON invalido", file: null, line: null, trace: null });
     return;
   }
   logger.error({ err: err.message }, "unhandled_error");
-  res.status(500).json({ error: "internal_error", message: "Erro interno" });
+  res.status(500).json({ code: 500, message: "Erro interno", file: null, line: null, trace: null });
 });
 
 // Banco remoto pode demorar a responder na partida: tenta algumas vezes antes de desistir.

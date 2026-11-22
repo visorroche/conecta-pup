@@ -1,24 +1,28 @@
 import { Router } from "express";
 import { z } from "zod";
-import { logger } from "../logger.js";
-import { isLoggedIn } from "../services/avec-login.js";
-import { CustomerInactiveError, findBridge, findBridgeBySalaoId } from "../services/bridge.js";
-import { readComanda } from "../services/comanda-read.js";
 import {
-  normalizeDate,
-  openComanda,
-  pickSearchField,
-} from "../services/comandas.js";
+  fail,
+  handleCommonError,
+  invalidParams,
+  type Outcome,
+  resolveSalao,
+  send,
+  sessionExpired,
+} from "../http.js";
+import { isLoggedIn } from "../services/avec-login.js";
+import { callLogMiddleware } from "../services/call-log.js";
+import { readComanda } from "../services/comanda-read.js";
+import { normalizeDate, openComanda, pickSearchField } from "../services/comandas.js";
 import {
   destroySession,
   getPage,
-  NoSessionError,
-  SessionBusyError,
   touchSession,
   withExistingSession,
 } from "../services/session-manager.js";
 
 export const comandasRouter: Router = Router();
+
+const BASE = "/mid/avec/salao/:salao_id";
 
 const optionalText = z
   .union([z.string(), z.number()])
@@ -26,98 +30,75 @@ const optionalText = z
   .optional()
   .transform((v) => (v ? v : undefined));
 
-const schema = z
-  .object({
-    // Identifica o cliente AVEC (a sessao aberta no login): slug e/ou salao_id
-    slug: z
-      .string()
-      .trim()
-      .toLowerCase()
-      .regex(/^[a-z0-9][a-z0-9_-]{0,63}$/, "slug invalido")
-      .optional(),
-    salao_id: z.coerce.number().int().positive().optional(),
+// ---------------------------------------------------------------------------
+// POST /api/mid/avec/salao/{salao_id}/comandas
+// ---------------------------------------------------------------------------
 
+const createSchema = z
+  .object({
     numero: optionalText.refine((v) => v === undefined || /^\d{1,10}$/.test(v), {
       message: "numero deve conter apenas digitos",
     }),
     data: optionalText,
+    // identificacao do cliente: campos diretos ...
     cpf: optionalText,
-    phone: optionalText,
+    celular: optionalText,
+    phone: optionalText, // apelido de celular
     codigo: optionalText,
     email: optionalText,
+    // ... ou no formato da busca de cliente da API antiga: chave=celular&valor=...
+    chave: z.enum(["celular", "telefone", "cpf", "email", "codigo"]).optional(),
+    valor: optionalText,
   })
-  .refine((v) => v.slug !== undefined || v.salao_id !== undefined, {
-    message: "informe slug ou salao_id",
-    path: ["slug"],
-  })
-  .refine((v) => v.codigo || v.cpf || v.phone || v.email, {
-    message: "informe codigo, cpf, phone ou email do cliente",
+  .refine((v) => v.codigo || v.cpf || v.celular || v.phone || v.email || (v.chave && v.valor), {
+    message: "informe codigo, cpf, celular ou email do cliente (ou chave e valor)",
     path: ["codigo"],
   });
 
-comandasRouter.post("/", async (req, res) => {
-  const parsed = schema.safeParse(req.body);
+comandasRouter.post(`${BASE}/comandas`, callLogMiddleware, async (req, res) => {
+  const parsed = createSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({
-      error: "invalid_params",
-      message: "Parametros invalidos",
-      details: parsed.error.issues.map((i) => ({ path: i.path.join("."), message: i.message })),
-    });
+    invalidParams(res, parsed.error);
     return;
   }
   const body = parsed.data;
 
   const data = normalizeDate(body.data);
   if (!data) {
-    res.status(400).json({
-      error: "invalid_params",
-      message: "data invalida (use aaaa-mm-dd ou dd/mm/aaaa)",
-    });
+    fail(res, 400, "data invalida (use aaaa-mm-dd ou dd/mm/aaaa)", "invalid_params");
     return;
   }
-  // Se vierem varios, vale a ordem: codigo, cpf, phone, email
-  const search = pickSearchField(body);
+
+  // chave/valor -> campo direto
+  const fields = {
+    codigo: body.codigo,
+    cpf: body.cpf,
+    phone: body.celular ?? body.phone,
+    email: body.email,
+  };
+  if (body.chave && body.valor) {
+    if (body.chave === "celular" || body.chave === "telefone") fields.phone ??= body.valor;
+    else fields[body.chave] ??= body.valor;
+  }
+  // Se vierem varios, vale a ordem: codigo, cpf, celular, email
+  const search = pickSearchField(fields);
   if (!search || !search.value) {
-    res.status(400).json({ error: "invalid_params", message: "Campo de busca vazio" });
+    fail(res, 400, "Campo de busca vazio", "invalid_params");
     return;
   }
 
-  let slug = body.slug;
+  let slug: string | undefined;
   try {
-    if (!slug) {
-      const bySalao = await findBridgeBySalaoId(body.salao_id!);
-      if (!bySalao) {
-        res.status(404).json({
-          error: "salao_not_found",
-          message: `Nenhum cliente com salao_id ${body.salao_id} em customers_bridget`,
-        });
-        return;
-      }
-      slug = bySalao.slug;
-    }
+    const salao = await resolveSalao(res, req.params.salao_id);
+    if (!salao) return;
+    slug = salao.slug;
 
-    const bridge = await findBridge(slug);
-    if (bridge && !bridge.active) throw new CustomerInactiveError(slug);
-    if (bridge?.salaoId != null && body.salao_id !== undefined && bridge.salaoId !== body.salao_id) {
-      res.status(400).json({
-        error: "slug_salao_mismatch",
-        message: `O slug "${slug}" pertence ao salao_id ${bridge.salaoId}, nao ao ${body.salao_id}`,
-      });
-      return;
-    }
-
-    const result = await withExistingSession(slug, async ({ browser, stored }) => {
+    const result = await withExistingSession<Outcome>(slug, async ({ browser, stored }) => {
       const page = await getPage(browser, slug!, stored.sessionId);
       const state = await isLoggedIn(page, slug!);
       if (state.kind !== "logged") {
         await destroySession(slug!);
-        return {
-          status: 401,
-          body: {
-            error: "session_expired",
-            message: "A sessao da AVEC expirou. Faca login novamente em POST /auth/login.",
-          },
-        };
+        return sessionExpired;
       }
 
       const opened = await openComanda(page, {
@@ -135,127 +116,71 @@ comandasRouter.post("/", async (req, res) => {
             : opened.reason === "already_open"
               ? 409
               : opened.reason === "session_expired"
-              ? 401
-              : opened.reason === "timeout"
-                ? 504
-                : 422;
-        return { status, body: { error: opened.reason, message: opened.message } };
+                ? 401
+                : opened.reason === "timeout"
+                  ? 504
+                  : 422;
+        return {
+          ok: false,
+          status,
+          error: opened.reason,
+          message: opened.message.replace(/ por phone /, " por celular "),
+        };
       }
       return {
-        status: 201,
-        body: {
-          success: true,
-          slug: slug!,
-          salao_id: bridge?.salaoId ?? null,
+        ok: true,
+        data: {
           comanda: {
+            id: opened.avecComandaId,
             numero: opened.numero,
             data: opened.data,
             cliente: opened.clienteNome,
-            busca: { campo: search.type, valor: search.value },
-            avec_id: opened.avecComandaId,
+            busca: { campo: search.type === "phone" ? "celular" : search.type, valor: search.value },
           },
         },
       };
     });
 
-    res.status(result.status).json(result.body);
+    send(res, result);
   } catch (err) {
-    if (err instanceof CustomerInactiveError) {
-      res.status(403).json({ error: "customer_inactive", message: err.message });
-      return;
-    }
-    if (err instanceof NoSessionError) {
-      res.status(401).json({ error: "not_logged_in", message: err.message });
-      return;
-    }
-    if (err instanceof SessionBusyError) {
-      res.status(409).json({ error: "session_busy", message: err.message });
-      return;
-    }
-    logger.error({ slug, err: err instanceof Error ? err.message : String(err) }, "comanda_failed");
-    res.status(502).json({
-      error: "browser_error",
-      message: "Falha ao abrir a comanda no navegador",
-    });
+    handleCommonError(res, err, { slug }, "comanda_failed");
   }
 });
 
 // ---------------------------------------------------------------------------
-// GET /comandas?slug=...&data=...&numero=...
+// GET /api/mid/avec/salao/{salao_id}/comanda/{numero}?data=
 // ---------------------------------------------------------------------------
 
-const getSchema = z
-  .object({
-    slug: z
-      .string()
-      .trim()
-      .toLowerCase()
-      .regex(/^[a-z0-9][a-z0-9_-]{0,63}$/, "slug invalido")
-      .optional(),
-    salao_id: z.coerce.number().int().positive().optional(),
-    numero: z.coerce.number().int().positive().max(9_999_999_999),
-    data: z.string().trim().optional(),
-  })
-  .refine((v) => v.slug !== undefined || v.salao_id !== undefined, {
-    message: "informe slug ou salao_id",
-    path: ["slug"],
-  });
+const getSchema = z.object({
+  numero: z.coerce.number().int().positive().max(9_999_999_999),
+  data: z.string().trim().optional(),
+});
 
-comandasRouter.get("/", async (req, res) => {
-  const parsed = getSchema.safeParse(req.query);
+comandasRouter.get(`${BASE}/comanda/:numero`, callLogMiddleware, async (req, res) => {
+  const parsed = getSchema.safeParse({ numero: req.params.numero, data: req.query.data });
   if (!parsed.success) {
-    res.status(400).json({
-      error: "invalid_params",
-      message: "Parametros invalidos",
-      details: parsed.error.issues.map((i) => ({ path: i.path.join("."), message: i.message })),
-    });
+    invalidParams(res, parsed.error);
     return;
   }
   const query = parsed.data;
   const data = normalizeDate(query.data);
   if (!data) {
-    res.status(400).json({
-      error: "invalid_params",
-      message: "data invalida (use aaaa-mm-dd ou dd/mm/aaaa)",
-    });
+    fail(res, 400, "data invalida (use aaaa-mm-dd ou dd/mm/aaaa)", "invalid_params");
     return;
   }
 
-  let slug = query.slug;
+  let slug: string | undefined;
   try {
-    if (!slug) {
-      const bySalao = await findBridgeBySalaoId(query.salao_id!);
-      if (!bySalao) {
-        res.status(404).json({
-          error: "salao_not_found",
-          message: `Nenhum cliente com salao_id ${query.salao_id} em customers_bridget`,
-        });
-        return;
-      }
-      slug = bySalao.slug;
-    }
-    const bridge = await findBridge(slug);
-    if (bridge && !bridge.active) throw new CustomerInactiveError(slug);
-    if (bridge?.salaoId != null && query.salao_id !== undefined && bridge.salaoId !== query.salao_id) {
-      res.status(400).json({
-        error: "slug_salao_mismatch",
-        message: `O slug "${slug}" pertence ao salao_id ${bridge.salaoId}, nao ao ${query.salao_id}`,
-      });
-      return;
-    }
+    const salao = await resolveSalao(res, req.params.salao_id);
+    if (!salao) return;
+    slug = salao.slug;
 
-    const result = await withExistingSession(slug, async ({ browser, stored }) => {
+    const result = await withExistingSession<Outcome>(slug, async ({ browser, stored }) => {
       const page = await getPage(browser, slug!, stored.sessionId);
       const state = await isLoggedIn(page, slug!);
       if (state.kind !== "logged") {
         await destroySession(slug!);
-        return {
-          status: 401,
-          body: {
-            error: "session_expired",
-            message: "A sessao da AVEC expirou. Faca login novamente em POST /auth/login.",
-          },
-        };
+        return sessionExpired;
       }
 
       const read = await readComanda(page, { numero: query.numero, data });
@@ -264,40 +189,14 @@ comandasRouter.get("/", async (req, res) => {
       if (!read.ok) {
         const status = read.reason === "not_found" ? 404 : read.reason === "session_expired" ? 401 : 504;
         const error = read.reason === "not_found" ? "comanda_not_found" : read.reason;
-        return { status, body: { error, message: read.message } };
+        return { ok: false, status, error, message: read.message };
       }
       const { itens, pagamentos, ...comanda } = read.comanda;
-      return {
-        status: 200,
-        body: {
-          success: true,
-          slug: slug!,
-          salao_id: bridge?.salaoId ?? null,
-          comanda,
-          itens,
-          pagamentos,
-        },
-      };
+      return { ok: true, data: { comanda, itens, pagamentos } };
     });
 
-    res.status(result.status).json(result.body);
+    send(res, result);
   } catch (err) {
-    if (err instanceof CustomerInactiveError) {
-      res.status(403).json({ error: "customer_inactive", message: err.message });
-      return;
-    }
-    if (err instanceof NoSessionError) {
-      res.status(401).json({ error: "not_logged_in", message: err.message });
-      return;
-    }
-    if (err instanceof SessionBusyError) {
-      res.status(409).json({ error: "session_busy", message: err.message });
-      return;
-    }
-    logger.error({ slug, err: err instanceof Error ? err.message : String(err) }, "comanda_read_failed");
-    res.status(502).json({
-      error: "browser_error",
-      message: "Falha ao consultar a comanda no navegador",
-    });
+    handleCommonError(res, err, { slug }, "comanda_read_failed");
   }
 });

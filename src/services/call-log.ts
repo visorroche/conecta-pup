@@ -75,7 +75,8 @@ export function callLogMiddleware(req: Request, res: Response, next: NextFunctio
 
   const originalJson = res.json.bind(res);
   res.json = (body?: unknown) => {
-    const err = (body as { error?: unknown } | null | undefined)?.error;
+    // codigo interno de erro: res.locals.errorCode (nao vai no corpo) ou body.error
+    const err = res.locals.errorCode ?? (body as { error?: unknown } | null | undefined)?.error;
     if (typeof err === "string") ctx.errorCode = err;
     return originalJson(body);
   };

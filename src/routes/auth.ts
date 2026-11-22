@@ -1,25 +1,17 @@
 import { Router } from "express";
 import { z } from "zod";
 import { config } from "../config.js";
-import { logger } from "../logger.js";
-import { noteCall } from "../services/call-log.js";
+import { fail, handleCommonError, invalidParams, ok } from "../http.js";
+import { noteCall, callLogMiddleware } from "../services/call-log.js";
 import { isLoggedIn, loginToAvec, readClientInfo } from "../services/avec-login.js";
 import {
-  BridgeProvisionError,
   CustomerInactiveError,
   ensureBridge,
   findBridge,
   findBridgeBySalaoId,
   saveClientInfo,
 } from "../services/bridge.js";
-import {
-  destroySession,
-  getPage,
-  ProxyUnavailableError,
-  saveStored,
-  SessionBusyError,
-  withSession,
-} from "../services/session-manager.js";
+import { destroySession, getPage, saveStored, withSession } from "../services/session-manager.js";
 
 export const authRouter: Router = Router();
 
@@ -40,28 +32,22 @@ const loginSchema = z
     path: ["slug"],
   });
 
-authRouter.post("/login", async (req, res) => {
+/** POST /api/auth/login */
+authRouter.post("/auth/login", callLogMiddleware, async (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({
-      error: "invalid_params",
-      message: "email, password e (slug ou salao_id) sao obrigatorios",
-      details: parsed.error.issues.map((i) => ({ path: i.path.join("."), message: i.message })),
-    });
+    invalidParams(res, parsed.error, "email, password e (slug ou salao_id) sao obrigatorios");
     return;
   }
   const { email, password, salao_id: salaoIdInput } = parsed.data;
   let slug = parsed.data.slug;
 
   try {
-    // Somente salao_id: o slug vem da tabela customers_bridget.
+    // Somente salao_id: o slug vem do cadastro.
     if (!slug) {
       const bySalao = await findBridgeBySalaoId(salaoIdInput!);
       if (!bySalao) {
-        res.status(404).json({
-          error: "salao_not_found",
-          message: `Nenhum cliente com salao_id ${salaoIdInput} em customers_bridget. Informe o slug no primeiro acesso.`,
-        });
+        fail(res, 404, `Salao ${salaoIdInput} nao encontrado. Informe o slug no primeiro acesso.`, "salao_not_found");
         return;
       }
       slug = bySalao.slug;
@@ -73,10 +59,7 @@ authRouter.post("/login", async (req, res) => {
 
     // slug e salao_id informados juntos precisam bater com o cadastro.
     if (existing?.salaoId != null && salaoIdInput !== undefined && existing.salaoId !== salaoIdInput) {
-      res.status(400).json({
-        error: "slug_salao_mismatch",
-        message: `O slug "${slug}" pertence ao salao_id ${existing.salaoId}, nao ao ${salaoIdInput}`,
-      });
+      fail(res, 400, "slug e salao_id nao pertencem ao mesmo cliente", "slug_salao_mismatch");
       return;
     }
 
@@ -91,12 +74,12 @@ authRouter.post("/login", async (req, res) => {
           if (state.kind === "logged") {
             const client = await readClientInfo(page, state.salaoId);
             if (client) {
-          noteCall({ salaoId: client.salaoId });
-          await saveClientInfo(slug!, client);
-        }
+              noteCall({ salaoId: client.salaoId });
+              await saveClientInfo(slug!, client);
+            }
             stored.lastUsedAt = new Date().toISOString();
             await saveStored(stored);
-            return { status: 200, body: payload(stored, true, client) };
+            return { ok: true as const, data: payload(slug!, true, client) };
           }
         }
 
@@ -105,12 +88,14 @@ authRouter.post("/login", async (req, res) => {
           // Descarta a sessao (e o IP) para a proxima tentativa comecar limpa.
           await destroySession(slug!);
           return {
+            ok: false as const,
             status: login.reason === "invalid_credentials" ? 401 : 502,
-            body: { error: login.reason, message: login.message },
+            error: login.reason,
+            message: login.message,
           };
         }
 
-        // O salao_id real vem do rodape da AVEC ("ID Cliente: N - NOME"); atualiza a tabela.
+        // O salao_id real vem do rodape da plataforma ("ID Cliente: N - NOME"); atualiza o cadastro.
         const client = await readClientInfo(page, login.salaoId);
         if (client) {
           noteCall({ salaoId: client.salaoId });
@@ -121,66 +106,35 @@ authRouter.post("/login", async (req, res) => {
         stored.email = email;
         stored.lastUsedAt = new Date().toISOString();
         await saveStored(stored);
-        return { status: 200, body: payload(stored, reused, client) };
+        return { ok: true as const, data: payload(slug!, reused, client) };
       },
       {
-        // outro usuario no mesmo slug: sessao nova (novo IP)
+        // outro usuario no mesmo slug: sessao nova
         shouldReset: (s) => s.loggedIn && s.email !== null && s.email !== email,
-        // sem ponte na tabela customers_bridget: cria a zone na Bright Data e grava a linha
+        // sem cadastro: provisiona o acesso do cliente e grava a linha
         resolveBridge: async () =>
           config.PROXY_ENABLED ? ensureBridge(slug!, email, salaoIdInput ?? null) : null,
       },
     );
 
-    res.status(result.status).json(result.body);
+    if (result.ok) ok(res, result.data);
+    else fail(res, result.status, result.message, result.error);
   } catch (err) {
-    if (err instanceof CustomerInactiveError) {
-      res.status(403).json({ error: "customer_inactive", message: err.message });
-      return;
-    }
-    if (err instanceof BridgeProvisionError) {
-      logger.error({ slug, err: err.message }, "bridge_provision_failed");
-      res.status(502).json({
-        error: "bridge_unavailable",
-        message: "Nao foi possivel criar a ponte (IP) deste cliente na Bright Data",
-      });
-      return;
-    }
-    if (err instanceof SessionBusyError) {
-      res.status(409).json({ error: "session_busy", message: err.message });
-      return;
-    }
-    if (err instanceof ProxyUnavailableError) {
-      res.status(502).json({ error: "proxy_unavailable", message: err.message });
-      return;
-    }
-    logger.error({ slug, err: err instanceof Error ? err.message : String(err) }, "login_failed");
-    if (slug) await destroySession(slug).catch(() => undefined);
-    res.status(502).json({
-      error: "browser_error",
-      message: "Falha ao executar o login no navegador",
-    });
+    // falha inesperada: descarta a sessao para a proxima tentativa comecar limpa
+    const known = handleCommonError(res, err, { slug }, "login_failed");
+    if (!known && slug) await destroySession(slug).catch(() => undefined);
   }
 });
 
 function payload(
-  stored: {
-    slug: string;
-    sessionId: string;
-    proxyIp: string | null;
-    proxyCountry?: string | null;
-  },
+  slug: string,
   reused: boolean,
   client: { salaoId: number; name: string | null } | null,
 ) {
   return {
-    success: true,
-    slug: stored.slug,
     salao_id: client?.salaoId ?? null,
+    slug,
     nome: client?.name ?? null,
-    sessionId: stored.sessionId,
     reused,
-    proxyIp: stored.proxyIp,
-    proxyCountry: stored.proxyCountry ?? null,
   };
 }
