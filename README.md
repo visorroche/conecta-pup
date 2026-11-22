@@ -77,7 +77,7 @@ Use nas demais rotas: `Authorization: Bearer <access_token>`.
 curl -H "Authorization: Bearer $TOKEN" "http://localhost:3100/api/mid/avec/salao/107521/cliente?chave=celular&valor=11999999999"
 ```
 
-`chave`: `celular`, `telefone`, `cpf`, `email`, `codigo` ou `nome` (os mesmos tipos da barra de busca de `/admin/clientes`). Resposta (200): `{ "code": 200, "data": { "salonClient": [ { id, salao_id, codigo, nome, email, celular, cpf, ... } ], "total": 1 } }` — campos como na API antiga. Sem resultado: `salonClient: []`. Devolve o cadastro completo de ate `limit` clientes (padrao 10, maximo 50); `total` e quantos casam com a busca. Somente leitura (alguns segundos por cliente).
+`chave`: `celular`, `telefone`, `cpf`, `email`, `codigo` ou `nome` (os mesmos tipos da barra de busca de `/admin/clientes`). Resposta (200): `{ "code": 200, "data": { "salonClient": [ { id, salao_id, codigo, nome, email, celular, cpf, ... } ], "total": 1 } }` — nomes de campos como na API antiga, mas so vem o que a plataforma informa (campos que ela nao tem, como `estrelas`, `favorito` ou `apelido`, nao aparecem). Sem resultado: `salonClient: []`. Devolve o cadastro completo de ate `limit` clientes (padrao 10, maximo 50); `total` e quantos casam com a busca. Somente leitura (alguns segundos por cliente).
 
 ### `GET /api/mid/avec/salao/{salao_id}/comanda/{numero}?data=`
 

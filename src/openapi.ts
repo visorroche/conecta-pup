@@ -221,7 +221,6 @@ export const openApiDocument = {
                   properties: {
                     id: { type: "integer", example: 127534666 },
                     salao_id: { type: "integer", example: 107521 },
-                    cliente_id: { type: "integer", example: 0 },
                     codigo: { type: "integer", example: 13369 },
                     nome: { type: "string", example: "Maria Silva" },
                     email: { type: "string", nullable: true },

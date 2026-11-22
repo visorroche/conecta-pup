@@ -17,20 +17,12 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Cliente no formato `salonClient` da API antiga. */
 export interface Cliente {
-  id: number | null;
+  id: number;
   salao_id: number;
-  cliente_id: number;
   codigo: number | null;
-  estrelas: null;
-  dinheiro: null;
-  favorito: number;
-  cliente: number;
-  recomendacao: null;
-  datarec: null;
   nome: string;
-  nome_social: null;
   email: string | null;
-  foto: string | null;
+  foto?: string;
   datanasc: string | null;
   telefone: string;
   celular: string;
@@ -48,37 +40,27 @@ export interface Cliente {
   estado: string;
   obs: string;
   cep: string;
-  apelido: string | null;
   email_mkt: number;
-  sms_mkt: number;
   emissao_nota: boolean;
-  whatsapp_mkt: number;
-  facebook_id: null;
   datacad: string | null;
   UA: string | null;
   agendamento_online: number;
   complemento: string;
-  responsavel: null;
-  responsavel_ua: string | null;
-  importacao_id: null;
+  responsavel_ua?: string;
   ddi_celular: number;
   ddi_telefone: number;
-  data_primeira_comanda: null;
-  data_ultima_comanda: null;
-  salao_cliente_id_origem: null;
   aceita_atendimento_ia: number;
   aceita_comunicacao_whatsapp: number;
-  consentimento_avecia: null;
 }
 
 export type SearchClientesResult =
-  | { ok: true; total: number; clientes: Cliente[] }
+  | { ok: true; total: number; clientes: Partial<Cliente>[] }
   | { ok: false; reason: "session_expired" | "timeout"; message: string };
 
 interface ListRow {
   codigo: string;
   nome: string;
-  foto: string | null;
+  foto?: string;
   contato: string;
 }
 
@@ -140,20 +122,12 @@ function fromModal(m: ModalData, row: ListRow | null, salaoId: number): Cliente 
   const cad = /Data de cadastro:\s*([0-9/]+\s+[0-9:]+)/i.exec(m.footer)?.[1];
   const mod = /[ÚU]ltima modifica[çc][aã]o:\s*([0-9/]+\s+[0-9:]+)(?:\s+por\s+(.+))?/i.exec(m.footer);
   return {
-    id: m.id ? Number(m.id) : null,
+    id: Number(m.id),
     salao_id: salaoId,
-    cliente_id: toInt(m.cliente_id),
     codigo: m.codigo ? toInt(m.codigo) : row ? toInt(row.codigo) : null,
-    estrelas: null,
-    dinheiro: null,
-    favorito: 0,
-    cliente: 1,
-    recomendacao: null,
-    datarec: null,
     nome: clean(m.nome || row?.nome || ""),
-    nome_social: null,
     email: m.email.trim() || null,
-    foto: row?.foto ?? null,
+    ...(row?.foto ? { foto: row.foto } : {}),
     datanasc: isoDate(m.datanasc),
     telefone: m.telefoneRaw,
     celular: m.celularRaw,
@@ -171,46 +145,32 @@ function fromModal(m: ModalData, row: ListRow | null, salaoId: number): Cliente 
     estado: /^selecione/i.test(m.estado) ? "" : m.estado,
     obs: m.obs,
     cep: m.cep,
-    apelido: clean(m.nome || row?.nome || "") || null,
     email_mkt: m.email_mkt ? 1 : 0,
-    sms_mkt: 0,
     emissao_nota: m.emissao_nota,
-    whatsapp_mkt: 0,
-    facebook_id: null,
     datacad: isoDateTime(cad),
     UA: isoDateTime(mod?.[1]),
     agendamento_online: m.agendamento_online ? 1 : 0,
     complemento: m.complemento,
-    responsavel: null,
-    responsavel_ua: mod?.[2]?.trim() || null,
-    importacao_id: null,
+    ...(mod?.[2]?.trim() ? { responsavel_ua: mod[2].trim() } : {}),
     ddi_celular: toInt(m.ddi_celular, 55),
     ddi_telefone: toInt(m.ddi_telefone, 55),
-    data_primeira_comanda: null,
-    data_ultima_comanda: null,
-    salao_cliente_id_origem: null,
     aceita_atendimento_ia: m.aceita_atendimento_ia ? 1 : 0,
     aceita_comunicacao_whatsapp: m.aceita_comunicacao_whatsapp ? 1 : 0,
-    consentimento_avecia: null,
   };
 }
 
-/** So com os dados da lista (quando o modal nao abre): o resto fica vazio. */
-function fromRow(row: ListRow, salaoId: number): Cliente {
+/** So com os dados da lista (quando o modal nao abre): devolve apenas o que se sabe. */
+function fromRow(row: ListRow, salaoId: number): Partial<Cliente> {
   const cel = /Cel:\s*([^\n]*)/i.exec(row.contato)?.[1]?.replace(/\D/g, "") ?? "";
   const email = /E-mail:\s*(\S+)/i.exec(row.contato)?.[1] ?? "";
-  return fromModal(
-    {
-      id: null, cliente_id: "0", codigo: row.codigo, nome: row.nome, email, datanasc: "",
-      ddi_celular: "55", ddi_telefone: "55", celularRaw: cel, telefoneRaw: "", operadora: "", sexo: "",
-      cpfRaw: "", rg: "", cep: "", estado: "", cidade: "", cod_cidade: "", bairro: "", endereco: "",
-      numero: "0", complemento: "", obs: "", como_conheceu: "", profissao: "", email_mkt: false,
-      agendamento_online: false, emissao_nota: false, aceita_atendimento_ia: false,
-      aceita_comunicacao_whatsapp: false, footer: "",
-    },
-    row,
-    salaoId,
-  );
+  return {
+    salao_id: salaoId,
+    codigo: toInt(row.codigo),
+    nome: clean(row.nome),
+    email: email || null,
+    ...(cel ? { celular: cel } : {}),
+    ...(row.foto ? { foto: row.foto } : {}),
+  };
 }
 
 const LIST_ROWS_JS = `(() => {
@@ -418,7 +378,7 @@ export async function searchClientes(
   const total = (matched as { recordsFiltered: number } | null)?.recordsFiltered ?? 0;
   const rows = ((await page.evaluate(LIST_ROWS_JS)) as ListRow[]).slice(0, input.limit);
 
-  const clientes: Cliente[] = [];
+  const clientes: Partial<Cliente>[] = [];
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]!;
     const modal = await readModal(page, i);
