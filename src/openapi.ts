@@ -12,18 +12,17 @@ const errorSchema = (example: { error: string; message: string }) => ({
 export const openApiDocument = {
   openapi: "3.0.3",
   info: {
-    title: "Puppeter AVEC API",
+    title: "Conecta API",
     version: "0.1.0",
     description:
-      "API que simula acessos a plataforma AVEC (SaaS B2B) usando Chromium via Puppeteer. " +
-      "Cada slug mantem uma sessao de navegador com um IP proprio (Bright Data `-session-<id>`), " +
-      "guardada no banco (`customers_bridget.session_data`) e reaproveitada nas chamadas seguintes.",
+      "API de integracao para consulta de comandas e relatorios e abertura de comandas. " +
+      "Faca `POST /auth/login` primeiro; as demais rotas reaproveitam a sessao aberta do cliente.",
   },
-  servers: [{ url: `http://localhost:${config.PORT}`, description: "Local" }],
+  servers: [{ url: "/" }],
   tags: [
-    { name: "Auth", description: "Autenticacao na plataforma AVEC" },
-    { name: "Comandas", description: "Financeiro / comandas da AVEC" },
-    { name: "Relatorios", description: "Relatorios da AVEC (/admin/relatorio/{codigo})" },
+    { name: "Auth", description: "Autenticacao" },
+    { name: "Comandas", description: "Comandas" },
+    { name: "Relatorios", description: "Relatorios" },
     { name: "Health", description: "Status do servico" },
   ],
   paths: {
@@ -54,10 +53,9 @@ export const openApiDocument = {
         tags: ["Comandas"],
         summary: "Consultar comanda (itens e pagamentos)",
         description:
-          "Usa a sessao ja logada do cliente. Procura a comanda pela data e numero no campo Buscar de " +
-          "`/admin/financeiro` (abertas) e, se nao achar, em `/admin/financeiro/comanda/historico` (finalizadas). " +
-          "Clica no lapis, le as abas Itens e Pagamento e devolve dois arrays. Somente leitura. " +
-          "A consulta e lenta (dezenas de segundos), pois usa o navegador atras do proxy.",
+          "Usa a sessao ja logada do cliente. Procura a comanda pela data e numero entre as abertas e, " +
+          "se nao achar, entre as finalizadas, e devolve os itens e os pagamentos. Somente leitura. " +
+          "A consulta pode levar dezenas de segundos.",
         parameters: [
           { name: "slug", in: "query", schema: { type: "string" }, description: "slug e/ou salao_id" },
           { name: "salao_id", in: "query", schema: { type: "integer" }, example: 107521 },
@@ -135,18 +133,16 @@ export const openApiDocument = {
           "401": { description: "`not_logged_in` ou `session_expired`", content: { "application/json": { schema: errorSchema({ error: "not_logged_in", message: "Faca login em POST /auth/login primeiro." }) } } },
           "404": { description: "`comanda_not_found` (nem abertas nem finalizadas) ou `salao_not_found`", content: { "application/json": { schema: errorSchema({ error: "comanda_not_found", message: "Comanda Nº0099 de 21/11/2026 nao encontrada" }) } } },
           "409": { description: "Sessao ocupada", content: { "application/json": { schema: errorSchema({ error: "session_busy", message: "Operacao em andamento" }) } } },
-          "502": { description: "Falha no navegador", content: { "application/json": { schema: errorSchema({ error: "browser_error", message: "Falha ao consultar a comanda no navegador" }) } } },
+          "502": { description: "Falha ao executar a operacao", content: { "application/json": { schema: errorSchema({ error: "browser_error", message: "Falha ao consultar a comanda" }) } } },
         },
       },
       post: {
         tags: ["Comandas"],
         summary: "Abrir comanda",
         description:
-          "Usa a sessao ja logada do cliente (faca `POST /auth/login` antes). Navega para `/admin/financeiro`, " +
-          "clica em ABRIR COMANDA, escolhe o tipo de busca no dropdown (E-mail, Telefone, CPF ou Codigo de Cadastro), " +
-          "seleciona o cliente, preenche data e numero e clica em Abrir. **Grava uma comanda real na AVEC.** " +
-          "Informe `cpf`, `phone`, `codigo` ou `email` (se vierem varios, vale a ordem codigo, cpf, phone, email). " +
-          "A tela da AVEC exige numero: se `numero` nao for enviado, usa o maior numero da lista de comandas + 1.",
+          "Usa a sessao ja logada do cliente (faca `POST /auth/login` antes). **Grava uma comanda real.** " +
+          "Informe `cpf`, `phone`, `codigo` ou `email` do cliente (se vierem varios, vale a ordem codigo, cpf, phone, email). " +
+          "Se `numero` nao for enviado, usa o maior numero de comanda existente + 1.",
         requestBody: {
           required: true,
           content: {
@@ -188,7 +184,7 @@ export const openApiDocument = {
                           type: "object",
                           properties: { campo: { type: "string", example: "codigo" }, valor: { type: "string" } },
                         },
-                        avec_id: { type: "string", nullable: true },
+                        id_externo: { type: "string", nullable: true },
                       },
                     },
                   },
@@ -201,9 +197,9 @@ export const openApiDocument = {
           "403": { description: "Cliente inativo", content: { "application/json": { schema: errorSchema({ error: "customer_inactive", message: "Cliente inativo" }) } } },
           "404": { description: "Cliente da comanda (`cliente_nao_encontrado`) ou salao nao encontrado", content: { "application/json": { schema: errorSchema({ error: "client_not_found", message: "Nenhum cliente encontrado" }) } } },
           "409": { description: "Sessao ocupada (`session_busy`) ou cliente ja tem comanda em aberto (`already_open`)", content: { "application/json": { schema: errorSchema({ error: "session_busy", message: "Operacao em andamento" }) } } },
-          "422": { description: "A AVEC recusou (ex.: numero ja usado, data invalida)", content: { "application/json": { schema: errorSchema({ error: "rejected", message: "mensagem exibida pela AVEC" }) } } },
-          "502": { description: "Falha no navegador", content: { "application/json": { schema: errorSchema({ error: "browser_error", message: "Falha ao abrir a comanda no navegador" }) } } },
-          "504": { description: "A AVEC nao respondeu", content: { "application/json": { schema: errorSchema({ error: "timeout", message: "A AVEC nao respondeu" }) } } },
+          "422": { description: "Recusada (ex.: numero ja usado, data invalida)", content: { "application/json": { schema: errorSchema({ error: "rejected", message: "motivo da recusa" }) } } },
+          "502": { description: "Falha ao executar a operacao", content: { "application/json": { schema: errorSchema({ error: "browser_error", message: "Falha ao abrir a comanda" }) } } },
+          "504": { description: "Tempo esgotado", content: { "application/json": { schema: errorSchema({ error: "timeout", message: "Tempo esgotado" }) } } },
         },
       },
     },
@@ -212,11 +208,10 @@ export const openApiDocument = {
         tags: ["Relatorios"],
         summary: "Consultar um relatorio",
         description:
-          "Usa a sessao ja logada do cliente. Abre `/admin/relatorio/{codigo}`, preenche os filtros pelo `name` " +
-          "dos inputs da tela (ex.: o relatorio 0123 tem `inicio` e `fim`), clica em Buscar e devolve as linhas " +
-          "(todas, sem paginacao) da resposta de `/admin/relatorios/listar`. Todo query param que nao seja `slug`/`salao_id` " +
-          "e tratado como filtro; um filtro que o relatorio nao tem devolve 400 com `filtros_disponiveis`. " +
-          "Datas aceitam `aaaa-mm-dd` ou `dd/mm/aaaa`. Valores vem como exibidos na tela (ex.: `1.800,00`). " +
+          "Usa a sessao ja logada do cliente e devolve todas as linhas do relatorio (sem paginacao). " +
+          "Todo query param que nao seja `slug`/`salao_id` e tratado como filtro do relatorio " +
+          "(ex.: o relatorio 0123 tem `inicio` e `fim`); um filtro que o relatorio nao tem devolve 400 com `filtros_disponiveis`. " +
+          "Datas aceitam `aaaa-mm-dd` ou `dd/mm/aaaa`. Valores vem formatados (ex.: `1.800,00`). " +
           "A consulta e lenta (30-60s). Somente leitura.",
         parameters: [
           { name: "codigo", in: "path", required: true, schema: { type: "string" }, example: "0123" },
@@ -256,23 +251,20 @@ export const openApiDocument = {
           "401": { description: "`not_logged_in` ou `session_expired`", content: { "application/json": { schema: errorSchema({ error: "not_logged_in", message: "Faca login em POST /auth/login primeiro." }) } } },
           "404": { description: "`relatorio_not_found` ou `salao_not_found`", content: { "application/json": { schema: errorSchema({ error: "relatorio_not_found", message: "Relatorio 9999 nao encontrado" }) } } },
           "409": { description: "Sessao ocupada", content: { "application/json": { schema: errorSchema({ error: "session_busy", message: "Operacao em andamento" }) } } },
-          "422": { description: "Relatorio sem linhas para ler (ex.: painel Metabase)", content: { "application/json": { schema: errorSchema({ error: "relatorio_unsupported", message: "Relatorio exibido em painel Metabase" }) } } },
-          "502": { description: "Falha no navegador", content: { "application/json": { schema: errorSchema({ error: "browser_error", message: "Falha ao consultar o relatorio no navegador" }) } } },
-          "504": { description: "A AVEC nao respondeu", content: { "application/json": { schema: errorSchema({ error: "timeout", message: "A AVEC nao respondeu a busca do relatorio" }) } } },
+          "422": { description: "Relatorio sem linhas para ler (ex.: relatorio em formato de painel)", content: { "application/json": { schema: errorSchema({ error: "relatorio_unsupported", message: "Relatorio em formato de painel" }) } } },
+          "502": { description: "Falha ao executar a operacao", content: { "application/json": { schema: errorSchema({ error: "browser_error", message: "Falha ao consultar o relatorio" }) } } },
+          "504": { description: "Tempo esgotado", content: { "application/json": { schema: errorSchema({ error: "timeout", message: "Tempo esgotado na busca do relatorio" }) } } },
         },
       },
     },
     "/auth/login": {
       post: {
         tags: ["Auth"],
-        summary: "Login na AVEC",
+        summary: "Login",
         description:
-          "Procura no banco uma sessao Puppeteer aberta para o `slug`. Se existir e o usuario " +
-          "continuar logado, a sessao e reaproveitada (`reused: true`). Caso contrario abre um " +
-          "novo Chromium com um IP novo e faz login em `https://admin.avec.beauty/{slug}/admin`. " +
-          "O proxy vem da tabela `customers_bridget` (uma zone Bright Data por slug); se o slug " +
-          "ainda nao tiver linha, a zone e criada via API da Bright Data e a linha e gravada com " +
-          "`active = true`. Slugs com `active = false` nao conseguem novos logins (403).",
+          "Abre a sessao do cliente. Se ja houver uma sessao ativa para o `slug` e o usuario " +
+          "continuar logado, ela e reaproveitada (`reused: true`). Clientes desativados nao " +
+          "conseguem novos logins (403).",
         requestBody: {
           required: true,
           content: {
@@ -287,13 +279,13 @@ export const openApiDocument = {
                   slug: {
                     type: "string",
                     description:
-                      "Slug do estabelecimento em admin.avec.beauty/{slug}/admin. Obrigatorio no primeiro acesso de um cliente novo.",
+                      "Slug do estabelecimento. Obrigatorio no primeiro acesso de um cliente novo.",
                     example: "les-sens-experience-byd",
                   },
                   salao_id: {
                     type: "integer",
                     description:
-                      "Id do salao na AVEC. Se vier sem `slug`, o slug e buscado em `customers_bridget`. Aceita numero ou string numerica.",
+                      "Id do salao. Se vier sem `slug`, o slug e buscado pelo cadastro. Aceita numero ou string numerica.",
                     example: 107521,
                   },
                 },
@@ -313,23 +305,16 @@ export const openApiDocument = {
                     success: { type: "boolean", example: true },
                     slug: { type: "string", example: "les-sens-experience-byd" },
                     salao_id: { type: "integer", nullable: true, example: 107521 },
-                    nome: { type: "string", nullable: true, example: "LES SENS EXPÉRIENCE - BYD", description: "Nome do cliente lido do rodape da AVEC" },
+                    nome: { type: "string", nullable: true, example: "LES SENS EXPÉRIENCE - BYD", description: "Nome do cliente" },
                     sessionId: {
                       type: "string",
-                      description: "Id da sessao do proxy (define o IP de saida)",
+                      description: "Id da sessao",
                       example: "9f2c1a7b3d4e5f60",
                     },
                     reused: {
                       type: "boolean",
                       description: "true quando continuou uma sessao ja aberta",
                       example: false,
-                    },
-                    proxyCountry: { type: "string", nullable: true, example: "BR", description: "Pais do IP de saida (sempre BR quando o proxy esta ligado)" },
-                    proxyIp: {
-                      type: "string",
-                      nullable: true,
-                      description: "IP de saida do Chromium (null com PROXY_ENABLED=false)",
-                      example: "187.12.34.56",
                     },
                   },
                 },
@@ -349,7 +334,7 @@ export const openApiDocument = {
             },
           },
           "401": {
-            description: "E-mail ou senha incorretos (mensagem vinda da AVEC)",
+            description: "E-mail ou senha incorretos",
             content: {
               "application/json": {
                 schema: errorSchema({
@@ -360,23 +345,23 @@ export const openApiDocument = {
             },
           },
           "403": {
-            description: "Cliente desativado (customers_bridget.active = false)",
+            description: "Cliente desativado",
             content: {
               "application/json": {
                 schema: errorSchema({
                   error: "customer_inactive",
-                  message: 'O cliente "avec" esta desativado (active=false)',
+                  message: 'O cliente "exemplo" esta desativado',
                 }),
               },
             },
           },
           "404": {
-            description: "salao_id informado sem slug e sem cadastro em customers_bridget",
+            description: "salao_id informado sem slug e sem cadastro",
             content: {
               "application/json": {
                 schema: errorSchema({
                   error: "salao_not_found",
-                  message: "Nenhum cliente com salao_id 424242 em customers_bridget.",
+                  message: "Nenhum cliente com salao_id 424242.",
                 }),
               },
             },
@@ -387,19 +372,19 @@ export const openApiDocument = {
               "application/json": {
                 schema: errorSchema({
                   error: "session_busy",
-                  message: 'Ja existe uma operacao em andamento para o slug "avec"',
+                  message: 'Ja existe uma operacao em andamento para o slug "exemplo"',
                 }),
               },
             },
           },
           "502": {
             description:
-              "Falha ao criar a ponte (`bridge_unavailable`), no proxy (`proxy_unavailable`), no Chromium (`browser_error`) ou bloqueio pela AVEC (`blocked`)",
+              "Servico temporariamente indisponivel",
             content: {
               "application/json": {
                 schema: errorSchema({
-                  error: "proxy_unavailable",
-                  message: "Nao foi possivel obter um IP pelo proxy",
+                  error: "service_unavailable",
+                  message: "Servico temporariamente indisponivel",
                 }),
               },
             },
