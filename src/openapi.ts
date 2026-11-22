@@ -74,6 +74,7 @@ export const openApiDocument = {
   },
   tags: [
     { name: "Auth", description: "Autenticacao" },
+    { name: "Clientes", description: "Clientes do salao" },
     { name: "Comandas", description: "Comandas do salao" },
     { name: "Relatorios", description: "Relatorios do salao" },
     { name: "Health", description: "Status do servico" },
@@ -182,6 +183,79 @@ export const openApiDocument = {
             },
           }),
           "401": errorResponse("Token ausente, invalido ou expirado", 401, "Token invalido"),
+        },
+      },
+    },
+
+    "/api/mid/avec/salao/{salao_id}/cliente": {
+      get: {
+        security: [{ bearerAuth: [] }],
+        tags: ["Clientes"],
+        summary: "Buscar cliente",
+        description:
+          "Usa a sessao ja logada do salao. Busca por `chave` + `valor` e devolve o cadastro completo de cada " +
+          "cliente encontrado (ate `limit`, padrao 10, maximo 50) em `salonClient`; `total` e a quantidade de " +
+          "clientes que casam com a busca. Sem resultado devolve `salonClient: []`. `celular`, `cpf` e `codigo` " +
+          "aceitam o valor com ou sem formatacao; `nome` busca por parte do nome. Somente leitura. " +
+          "Pode levar alguns segundos por cliente retornado.",
+        parameters: [
+          salaoIdParam,
+          {
+            name: "chave",
+            in: "query",
+            required: true,
+            schema: { type: "string", enum: ["celular", "telefone", "cpf", "email", "codigo", "nome"] },
+            example: "celular",
+          },
+          { name: "valor", in: "query", required: true, schema: { type: "string" }, example: "11999999999" },
+          { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 50, default: 10 } },
+        ],
+        responses: {
+          "200": okResponse("Clientes encontrados (lista vazia se nenhum)", {
+            type: "object",
+            properties: {
+              salonClient: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    id: { type: "integer", example: 127534666 },
+                    salao_id: { type: "integer", example: 107521 },
+                    cliente_id: { type: "integer", example: 0 },
+                    codigo: { type: "integer", example: 13369 },
+                    nome: { type: "string", example: "Maria Silva" },
+                    email: { type: "string", nullable: true },
+                    datanasc: { type: "string", nullable: true, example: "1990-06-09" },
+                    telefone: { type: "string", example: "" },
+                    celular: { type: "string", example: "11999999999" },
+                    cpf: { type: "string", example: "" },
+                    sexo: { type: "string", example: "F" },
+                    endereco: { type: "string" },
+                    numero: { type: "integer" },
+                    bairro: { type: "string" },
+                    cidade: { type: "string" },
+                    estado: { type: "string" },
+                    cep: { type: "string" },
+                    obs: { type: "string" },
+                    email_mkt: { type: "integer", example: 1 },
+                    emissao_nota: { type: "boolean" },
+                    agendamento_online: { type: "integer", example: 1 },
+                    datacad: { type: "string", nullable: true, example: "2026-10-20 15:54:00" },
+                    UA: { type: "string", nullable: true, example: "2026-10-20 15:54:00" },
+                    ddi_celular: { type: "integer", example: 55 },
+                    aceita_atendimento_ia: { type: "integer", example: 1 },
+                    aceita_comunicacao_whatsapp: { type: "integer", example: 1 },
+                  },
+                  additionalProperties: true,
+                },
+              },
+              total: { type: "integer", example: 1 },
+            },
+          }),
+          "400": errorResponse("Parametros invalidos", 400, "Parametros invalidos"),
+          ...sessionErrors,
+          "404": errorResponse("Salao nao encontrado", 404, "Salao 1 nao encontrado"),
+          "504": errorResponse("Tempo esgotado", 504, "A plataforma nao respondeu a busca de clientes"),
         },
       },
     },

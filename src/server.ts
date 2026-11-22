@@ -5,6 +5,7 @@ import { ensureSchema, pool } from "./db.js";
 import { logger } from "./logger.js";
 import { openApiDocument } from "./openapi.js";
 import { authRouter } from "./routes/auth.js";
+import { clientesRouter } from "./routes/clientes.js";
 import { comandasRouter } from "./routes/comandas.js";
 import { relatoriosRouter } from "./routes/relatorios.js";
 import { shutdownSessions } from "./services/session-manager.js";
@@ -30,7 +31,7 @@ app.get("/docs.json", (_req, res) => {
 app.use("/docs", swaggerUi.serve, swaggerUi.setup(openApiDocument));
 
 // Rotas no padrao da API antiga: /api/auth/login e /api/mid/avec/salao/{salao_id}/...
-app.use("/api", authRouter, comandasRouter, relatoriosRouter);
+app.use("/api", authRouter, clientesRouter, comandasRouter, relatoriosRouter);
 
 // Rota inexistente (mesmo formato/mensagem da API antiga)
 app.use((req: Request, res: Response) => {

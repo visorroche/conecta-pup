@@ -45,6 +45,7 @@ Padrao de resposta (igual ao da API antiga "Mid"):
 | GET    | `/health`                                               | Status do servico e do banco                                      |
 | POST   | `/api/auth/login`                                       | Login (abre/reaproveita a sessao do salao)                        |
 | GET    | `/api/auth/user-profile`                                | Usuario do token                                                  |
+| GET    | `/api/mid/avec/salao/{salao_id}/cliente?chave=&valor=`  | Busca clientes (celular, telefone, cpf, email, codigo, nome)      |
 | GET    | `/api/mid/avec/salao/{salao_id}/comanda/{numero}?data=` | Consulta uma comanda (itens e pagamentos)                         |
 | POST   | `/api/mid/avec/salao/{salao_id}/comandas`               | Abre uma comanda (grava de verdade)                               |
 | GET    | `/api/mid/avec/salao/{salao_id}/relatorio/{codigo}?...` | Linhas de um relatorio; query params = filtros do relatorio       |
@@ -69,6 +70,14 @@ Use nas demais rotas: `Authorization: Bearer <access_token>`.
 
 - Cria a sessao do salao ou reaproveita a existente (`reused: true`). Erros: 400 (parametros), 401 (credenciais), 403 (cliente desativado), 404 (`salao_id` sem cadastro e sem `slug`), 409 (operacao em andamento), 502 (indisponivel).
 - Primeiro acesso de um slug: provisiona o IP brasileiro do cliente (regras de zona na secao de log/zonas abaixo) e grava `customers_bridget`.
+
+### `GET /api/mid/avec/salao/{salao_id}/cliente?chave=&valor=&limit=`
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:3100/api/mid/avec/salao/107521/cliente?chave=celular&valor=11999999999"
+```
+
+`chave`: `celular`, `telefone`, `cpf`, `email`, `codigo` ou `nome` (os mesmos tipos da barra de busca de `/admin/clientes`). Resposta (200): `{ "code": 200, "data": { "salonClient": [ { id, salao_id, codigo, nome, email, celular, cpf, ... } ], "total": 1 } }` — campos como na API antiga. Sem resultado: `salonClient: []`. Devolve o cadastro completo de ate `limit` clientes (padrao 10, maximo 50); `total` e quantos casam com a busca. Somente leitura (alguns segundos por cliente).
 
 ### `GET /api/mid/avec/salao/{salao_id}/comanda/{numero}?data=`
 
