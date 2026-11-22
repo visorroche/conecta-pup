@@ -61,7 +61,10 @@ log "Certificado HTTPS"
 SERVER_IP="$(curl -fsS -m 5 https://api.ipify.org || true)"
 DNS_IP="$(getent ahostsv4 "$DOMAIN" | awk 'NR==1{print $1}' || true)"
 if [ -d "/etc/letsencrypt/live/$DOMAIN" ]; then
-  echo "Certificado de $DOMAIN ja existe (renovacao automatica via certbot.timer)"
+  # O arquivo do nginx acima e reinstalado so com a porta 80 a cada deploy; reaplica o
+  # bloco HTTPS/redirect do certbot usando o certificado que ja existe (nao emite outro).
+  echo "Certificado de $DOMAIN ja existe: reaplicando no nginx (renovacao automatica via certbot.timer)"
+  certbot install --nginx --cert-name "$DOMAIN" -d "$DOMAIN" --redirect --non-interactive
 elif [ -n "$DNS_IP" ] && [ "$DNS_IP" = "$SERVER_IP" ]; then
   if [ -n "$CERTBOT_EMAIL" ]; then
     EMAIL_ARGS=(-m "$CERTBOT_EMAIL")
